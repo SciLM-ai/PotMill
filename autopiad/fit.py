@@ -95,9 +95,7 @@ def fit(features_directory, hyperparameters, feature_names, train_fraction = 0.7
         print("Force testing RMSE is", np.sqrt(np.mean(test_residual[force_selector_test])))
         
 
-        results_filename = "results_" + rcuts_to_string(rcuts,delimiter="_") + "_" + \
-            twojmaxes_to_string(twojmaxes,delimiter="_") + "_%.3f.csv"%eweight
-        with open(results_filename,"a") as file:
+        with open("results.csv","a") as file:
             results_line = "%i,"%fold + rcuts_to_string(rcuts,delimiter=",") + "," + twojmaxes_to_string(twojmaxes,delimiter=",")
             results_line += ",%.3f,%.10f,%.10f,%.10f,%.10f,%.10f,%.10f,%.10f,%.10f\n" % \
                     (eweight,train_e_rmse,train_f_rmse,test_e_rmse,test_f_rmse,train_e_rmse_weighted,

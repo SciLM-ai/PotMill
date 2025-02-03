@@ -13,7 +13,7 @@ def featurize(config, fitsnap_config, rcuts, start_path):
     size = comm.Get_size()
     
     # atoms_traj = pd.read_hdf(start_path + config['DATA']['data_path'])['ase_atoms'].to_list()
-    atoms_traj = pd.read_pickle(start_path + config["DATA"]["data_path"], compression="gzip")['ase_atoms'].to_list()[:500]
+    atoms_traj = pd.read_pickle(start_path + config["DATA"]["data_path"], compression="gzip")['ase_atoms'].to_list()
     configs_num = len(atoms_traj)
     ratio = configs_num//size
     rem = configs_num%size

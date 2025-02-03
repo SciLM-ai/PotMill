@@ -1,32 +1,33 @@
 import os
 import pandas as pd
 import glob
+from autopiad.tools import rcuts_to_string
 
 
-def pareto(tasks, rs, start_path, hyperparameters_list, job_ids_for_fit, trigger_fit, auto_reduce_hps, wait_for_last_fit):
+def pareto(tasks, rs, start_path, hyperparameters_list, feature_names, job_ids_for_fit, remaining_fits, trigger_fit, auto_reduce_hps, wait_for_last_fit):
 
-    results_filenames = glob.glob(start_path+"fits/results_*")
+    results_dirs = glob.glob(start_path+"fits/"+str(len(job_ids_for_fit))+"_*")
     results_df = pd.DataFrame()
-    for results_filename in results_filenames:
-        results_ = pd.read_csv(results_filename, header=None)
+    for results_dir in results_dirs:
+        results_ = pd.read_csv(results_dir+"/results.csv", header=None)
         columns_list = ["rcut"+str(i) for i in range(len(hyperparameters_list[0][0]))]
         columns_list.extend(["twojmax"+str(i) for i in range(len(hyperparameters_list[0][1]))])
         columns_list.extend(["eweight","train_e_rmse","train_f_rmse","test_e_rmse","test_f_rmse",
                              "train_e_rmse_weighted","train_f_rmse_weighted","test_e_rmse_weighted","test_f_rmse_weighted"])
         results_df = pd.concat([results_df,pd.DataFrame(results_.mean().values[1:].reshape(1,-1), columns=columns_list)])
-    os.system("rm "+start_path+"fits/results_*")
+    # os.system("rm "+start_path+"fits/results_*")
 
     cost = pd.DataFrame()
-    for i in range(len(rs.nodelist)):
-        with open(start_path+"fits/featurize_%i.out" % i, "r") as f:
+    for i in range(len(hyperparameters_list)):
+        rcuts, twojmaxes, _ = hyperparameters_list[i]
+        feature_size = len([i for i, lst in enumerate(feature_names) if len(lst)==1 or all(value <= twojmaxes[0] for value in lst[1:])])
+        rcuts_str = rcuts_to_string(rcuts,"_")
+        with open(start_path+"features/"+rcuts_str+"/flux.out", "r") as f:
             lines = f.readlines()
-            for i in range(len(lines)):
-                if i % 2 == 0:
-                # if "process_configs" in lines[i]:
-                    values_list = [float(lines[i].split()[j]) for j in range(len(hyperparameters_list[0][0]))]
-                    values_list.extend([int(lines[i].split()[j+len(hyperparameters_list[0][0])])
-                                        for j in range(len(hyperparameters_list[0][1]))])
-                    cost=pd.concat([cost,pd.DataFrame([values_list+[float(lines[i+1].split()[2])]],
+            for line in lines:
+                if "process_configs" in line:
+                    values_list = hyperparameters_list[i][0] + hyperparameters_list[i][1]
+                    cost=pd.concat([cost,pd.DataFrame([values_list+[float(line.split()[2])*feature_size/len(feature_names)]],
                                                     columns=columns_list[:-9]+['cost'])])
 
     results_df = results_df.merge(cost, how='inner', on=columns_list[:-9])

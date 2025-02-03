@@ -51,7 +51,7 @@ def main():
 
 
     # scan the available configurations and sort them by size
-    df = pd.read_pickle(start_path + config["DATA"]["data_path"], compression="gzip").iloc[:500,:]
+    df = pd.read_pickle(start_path + config["DATA"]["data_path"], compression="gzip")
     force_energy_filename = start_path + "force_energy.pkl"
     df.iloc[:,4:].to_pickle(force_energy_filename)
     index0 = 0
@@ -264,8 +264,8 @@ def main():
                 completed_fits = []
                 print("All fits are done!")
                 if pareto_mode:
-                    if pareto(tasks, rs, start_path, hyperparameters_list, job_ids_for_fit,
-                            trigger_fit, auto_reduce_hps, wait_for_last_fit):
+                    if pareto(tasks, rs, start_path, hyperparameters_list, feature_names, job_ids_for_fit,
+                              remaining_fits, trigger_fit, auto_reduce_hps, wait_for_last_fit):
                         break
             
             
