@@ -1,24 +1,30 @@
 [MODE]
+resume = 0
 vasp = 1
 featurize = 1
 fit = 1
 pareto = 1
-fit_freq = 200
+fit_freq = 100
 auto_reduce_hyperparameters = 0
 ncores_per_fit = 5
 
 [FitSNAP]
+mlip = ACE
 chem_elem = W Re
 filename = FitSNAP.in
 
 [RCUT]
-min_rcut = 4 4
-max_rcut = 6 6
-num_rcut = 2 2
+min_rcut = 4
+max_rcut = 6
+num_rcut = 5
 
-[TWOJMAX]
-min_twojmax = 5 5
-max_twojmax = 6 6
+[NMAX]
+min_nmax = 6 3
+max_nmax = 10 4
+
+[LMAX]
+min_lmax = 0 1
+max_lmax = 0 2
 
 [EWEIGHT]
 middle_eweight = 10

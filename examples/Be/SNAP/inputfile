@@ -1,13 +1,15 @@
 [MODE]
+resume = 0
 vasp = 1
 featurize = 1
 fit = 1
 pareto = 1
-fit_freq = 200
+fit_freq = 100
 auto_reduce_hyperparameters = 0
 ncores_per_fit = 5
 
 [FitSNAP]
+mlip = SNAP
 chem_elem = Be
 filename = FitSNAP.in
 

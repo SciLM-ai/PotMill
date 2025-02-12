@@ -18,13 +18,17 @@ min_rcut = 4
 max_rcut = 6
 num_rcut = 5
 
-[TWOJMAX]
-min_twojmax = 6
-max_twojmax = 10
+[NMAX]
+min_nmax = 6 3
+max_nmax = 10 4
+
+[LMAX]
+min_lmax = 0 1
+max_lmax = 0 2
 
 [EWEIGHT]
 middle_eweight = 10
-num_eweights = 5
+num_eweights = 3
 constant = 1
 
 [DATA]
