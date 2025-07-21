@@ -120,7 +120,7 @@ def convert_xml_to_jason(xml_file, JSON_file):
 def lammps(start_path, input_file, job_id, first_index):
 
     print("hey")
-    os.environ['ASE_LAMMPSRUN_COMMAND'] = start_path+"run_vasp_6.3.2_std_ase.sh"
+    os.environ['ASE_LAMMPSRUN_COMMAND'] = start_path+"run_lammps_ase.sh"
     # os.environ['ASE_LAMMPSRUN_COMMAND']="flux run -n 1 -c 1 -g 0 /users/baghishov/codes/lammps/build-fitsnap/lmp"
     # os.environ['ASE_LAMMPSRUN_COMMAND']="mpirun -np 1 /users/baghishov/codes/lammps/build-fitsnap/lmp"
     # os.environ['ASE_LAMMPSRUN_COMMAND']="/users/baghishov/codes/lammps/build-fitsnap/lmp"

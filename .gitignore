@@ -4,6 +4,7 @@ examples/*
 !examples/Be/ACE/inputfile
 !examples/Be/ACE/FitSNAP.in
 !examples/Be/ACE/run_debug.sh
+!examples/Be/ACE/run_lammps_ase.sh
 !examples/Be/ACE/run_vasp_6.3.2_std_ase.sh
 !examples/Be/SNAP/inputfile
 !examples/Be/SNAP/FitSNAP.in

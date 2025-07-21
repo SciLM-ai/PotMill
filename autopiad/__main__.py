@@ -138,23 +138,9 @@ def main():
     if pareto_mode: pareto_futures = []
 
 
-    with FluxJobExecutor(max_workers=all_ngpus, flux_log_files=True) as vasp_exe:
+    with FluxJobExecutor(max_workers=all_ngpus, flux_log_files=True, cache_directory=start_path+'vasp_runs') as vasp_exe:
 
-        with FluxJobExecutor(flux_log_files=True) as exe:
-
-            if feature_mode:
-                ncores_per_featurization = int((all_ncores - all_ngpus)/len(rs.nodelist)) - 2
-                print("FEATURIZATION jobs submission...")
-                print(f"Number of cores allocated for featurization step is {ncores_per_featurization}")
-                for i in featurizations:  # Loop over rcuts_list indices
-                    rcuts = rcuts_list[i]
-                    feature_directory = start_path + "features/" + rcuts_to_string(rcuts, delimiter='_')
-                    os.makedirs(feature_directory, exist_ok=True)
-                    fs = exe.submit(featurize, df['ase_atoms'].to_list(), config, fitsnap_config, rcuts,
-                                    resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0,
-                                                   "num_nodes": 1, "cwd": feature_directory})
-                    fs.task_ = i
-                    featurization_futures.append(fs)
+        with FluxJobExecutor(flux_log_files=True, cache_directory='run', cache_directory=start_path+'runs') as exe:
                     
             if vasp_mode:
                 print("VASP jobs submission...")
@@ -177,6 +163,20 @@ def main():
                                         resource_dict={"cores": 1, "cwd": start_path+"vasp-energy"})
                         fs.task_ = i  # DO I REALLY NEED IT??? and even others
                         b_futures.append(fs)
+
+            if feature_mode:
+                ncores_per_featurization = int((all_ncores - all_ngpus)/len(rs.nodelist)) - 3
+                print("FEATURIZATION jobs submission...")
+                print(f"Number of cores allocated for featurization step is {ncores_per_featurization}")
+                for i in featurizations:  # Loop over rcuts_list indices
+                    rcuts = rcuts_list[i]
+                    feature_directory = start_path + "features/" + rcuts_to_string(rcuts, delimiter='_')
+                    os.makedirs(feature_directory, exist_ok=True)
+                    fs = exe.submit(featurize, df['ase_atoms'].to_list(), config, fitsnap_config, rcuts,
+                                    resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0,
+                                                   "num_nodes": 1, "cwd": feature_directory})
+                    fs.task_ = i
+                    featurization_futures.append(fs)
 
             if fit_mode:
                 print("FITTING jobs submission...")
@@ -218,21 +218,21 @@ def main():
                     pareto_futures.append(fs)
 
 
-            while len(pareto_futures):
+    while len(pareto_futures):
 
-                if feature_mode: 
-                    featurization_futures = check_and_print_status(featurization_futures, "FEATURIZATIONS", len(featurizations))
+        if feature_mode: 
+            featurization_futures = check_and_print_status(featurization_futures, "FEATURIZATIONS", len(featurizations))
 
-                if vasp_mode: vasp_futures = check_and_print_status(vasp_futures, "VASP", len(vasp_idxs))
+        if vasp_mode: vasp_futures = check_and_print_status(vasp_futures, "VASP", len(vasp_idxs))
 
-                if fit_mode: fitting_futures = check_and_print_status(fitting_futures, "FITTING", len(fits))
+        if fit_mode: fitting_futures = check_and_print_status(fitting_futures, "FITTING", len(fits))
 
-                if pareto_mode: cost_futures = check_and_print_status(cost_futures, "COST", len(costs))
+        if pareto_mode: cost_futures = check_and_print_status(cost_futures, "COST", len(costs))
 
-                if pareto_mode: pareto_futures = check_and_print_status(pareto_futures, "PARETO", len(b_futures)-1)
-            
-                with open("checkpoint.pkl", "wb") as f:
-                    pickle.dump((vasp_futures, featurization_futures, fitting_futures, cost_futures), f)
+        if pareto_mode: pareto_futures = check_and_print_status(pareto_futures, "PARETO", len(b_futures)-1)
+    
+        # with open("checkpoint.pkl", "wb") as f:
+        #     pickle.dump((vasp_futures, featurization_futures, fitting_futures, cost_futures), f)
 
 
 if __name__ == "__main__":

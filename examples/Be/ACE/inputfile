@@ -1,6 +1,6 @@
 [MODE]
 resume = 0
-entropy = 1
+entropy = 0
 featurize = 1
 vasp = 1
 fit = 1
