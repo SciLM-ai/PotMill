@@ -1,10 +1,8 @@
-import pandas as pd
-import os, copy, time, pickle
-from ase.io import write
+import os, pickle
 from autopiad.tools import create_rcut_range, rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
 from autopiad.tools import hyperparameters_to_string
 from autopiad.tools import combined_ace_hyperparameters, combined_snap_hyperparameters, parse_inputfile, configparse
-from autopiad.entropy.binary.optimizer import EntropyMaximizer 
+from autopiad.entropy import max_entropy_atoms_iterator 
 from autopiad.featurize import featurize
 from autopiad.vasp import vasp
 from autopiad.lammps import lammps
@@ -14,7 +12,6 @@ from autopiad.pareto import pareto
 from autopiad.pops import pops
 import flux
 import concurrent.futures
-import flux.job
 from executorlib import FluxJobExecutor
 
 
@@ -42,6 +39,10 @@ def combine_b(start_path, vasp_IDs_finished, vasp_IDs_ready_for_fit):
     len1, len2 = len(vasp_IDs_ready_for_fit), len(new_vasp_IDs_ready_for_fit)
     os.system(f"cat {start_path}features/b{len1}.csv {new_b_files} > {start_path}features/b{len2}.csv")
     return new_vasp_IDs_ready_for_fit
+
+
+def next_atoms_from_entropy(entropy_iterator):
+    return next(entropy_iterator)
 
 
 def main():
@@ -80,9 +81,10 @@ def main():
         hyperparameters_list_noeweight = combined_snap_hyperparameters(config, w_eweight=False)
         fitsnap_config["BISPECTRUM"]["twojmax"] = twojmaxes_to_string(config["TWOJMAX"]["max_twojmax"])
 
+    if not resume_mode and entropy_mode:
+        os.system("rm -rf "+start_path+"entropy")
+        os.mkdir(start_path+"entropy")
     if not resume_mode and vasp_mode:
-        os.system("rm -rf "+start_path+"energy-configs")
-        os.mkdir(start_path+"energy-configs")
         os.system("rm -rf "+start_path+"vasp-energy")
         os.mkdir(start_path+"vasp-energy")
     if not resume_mode and feature_mode:
@@ -100,45 +102,16 @@ def main():
         os.system("rm -rf "+start_path+"pops")
         os.mkdir(start_path+"pops")
 
-
-    # if entropy_mode:
-    #     em = EntropyMaximizer()
-    # else:
-    # scan the available configurations and sort them by size
-    try:
-        df = pd.read_hdf(start_path + config["DATA"]["data_path"]).iloc[:500,:]
-    except:
-        try:
-            df = pd.read_pickle(start_path + config["DATA"]["data_path"], compression="gzip").iloc[:500,:]
-            force_energy_filename = start_path + "force_energy.pkl"
-            df.iloc[:,4:].to_pickle(force_energy_filename)
-        except:
-            raise
-    index0 = 0
-    index1 = df.shape[0]
-    vasps = []
-    first_index = [0]
-    if not df.index.equals(pd.RangeIndex(0,df.shape[0],1)):
-        df.reset_index(inplace=True)
-    for i in range(index0,index1):
-        atoms = df['ase_atoms'][i]
-        n_atoms = len(atoms)
-        vasps.append([i,n_atoms])
-        first_index.append(first_index[-1]+1+3*n_atoms)
-        if not os.path.isfile(start_path+"energy-configs/em_%i.dat"% i):
-            write(start_path+"energy-configs/em_%i.dat"% i, atoms, format='vasp')
-        os.makedirs(start_path+"vasp-energy/vasp-em_%i"% i, exist_ok=True)
-    vasps.sort(key=lambda x: x[1]) #large systems are at the end, small systems are at the front
+    num_configurations = 20
 
     if resume_mode and os.path.isfile("checkpoint.pkl"):
         with open("checkpoint.pkl", "rb") as f:
-            (featurizations, vasp_idxs, fits, costs) = pickle.load(f)
+            (featurizations, fits, costs) = pickle.load(f)
             # Here I also need to have futures, because of dependency
     elif resume_mode:  # Think about new jobs deleting the old ones, make sure it creates new directories for the new jobs
         raise NotImplementedError("Resuming without checkpoint file is not implemented yet")  
     else:
         featurizations = [i for i in range(len(rcuts_list))] if feature_mode else []
-        vasp_idxs = [i for i in range(len(vasps))] if vasp_mode else []
         fits = [i for i in range(len(hyperparameters_list))] if fit_mode else []
         costs = [i for i in range(len(hyperparameters_list_noeweight))] if pareto_mode else []
 
@@ -154,123 +127,137 @@ def main():
     with FluxJobExecutor(max_workers=all_ngpus, flux_log_files=True, cache_directory=start_path+'vasp_runs') as vasp_exe:
 
         with FluxJobExecutor(flux_log_files=True, cache_directory=start_path+'runs') as exe:
+            
+            with FluxJobExecutor(init_function=max_entropy_atoms_iterator, block_allocation=True, max_workers=1) as entropy_exe:
+
+                if entropy_mode:
+                    print("Entropy jobs submission...")
+                    entropy_atoms_futures = [entropy_exe.submit(next_atoms_from_entropy) for _ in range(num_configurations)]
+
+                if vasp_mode:
+                    print("VASP jobs submission...")
+                    first_index = [0]
+                    for i, entropy_atoms in enumerate(entropy_atoms_futures):  # Loop over atomic configuration indices
+                        vasp_directory = start_path + "vasp-energy/vasp-em_%i/"%i
+                        os.makedirs(vasp_directory, exist_ok=True)
+                        # fs = vasp_exe.submit(fake_vasp, force_energy_filename, vasp_ID, first_index[vasp_ID],
+                        #                 resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1, "cwd": vasp_directory})
+                        fs = vasp_exe.submit(vasp, start_path, entropy_atoms, i, first_index[i],
+                                            resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
+                                                            "cwd": vasp_directory, "error_log_file":"error.out"})
+                        # fs = vasp_exe.submit(lammps, start_path, start_path+input_file, vasp_ID, first_index[vasp_ID],
+                        #                      resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
+                        #                                     "cwd": vasp_directory, "error_log_file":"error.out"})
+                        fs.task_ = i
+                        vasp_futures.append(fs)
+
+                    batched_vasp_futures = exe.batched(vasp_futures, n=fit_freq)
+                    for i, batched_vasp_future in enumerate(batched_vasp_futures):
+                        fs = exe.submit(combine_b, start_path, batched_vasp_future, b_futures[-1],
+                                        resource_dict={"cores": 1, "cwd": start_path+"vasp-energy",
+                                                    "error_log_file":"error.out"})
+                        fs.task_ = i  # DO I REALLY NEED IT??? and even others
+                        b_futures.append(fs)
+
+                if feature_mode:
+                    ncores_per_featurization = int((all_ncores - all_ngpus)/len(rs.nodelist)) - 3
+                    print("FEATURIZATION jobs submission...")
+                    print(f"Number of cores allocated for featurization step is {ncores_per_featurization}")
+                    for i, batched_vasp_future in enumerate(batched_vasp_futures):
+                        entropy_atoms = [entropy_atoms_futures[vasp_future.task_] for vasp_future in batched_vasp_future]
+                        featurization_futures_temp = []
+                        for j in featurizations:  # Loop over rcuts_list indices
+                            rcuts = rcuts_list[j]
+                            feature_directory = start_path + "features/" + rcuts_to_string(rcuts, delimiter='_')
+                            os.makedirs(feature_directory, exist_ok=True)
+                            fs = exe.submit(featurize, entropy_atoms, config, fitsnap_config, rcuts, batch_ID=i,
+                                            resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0,
+                                                        "num_nodes": 1, "cwd": feature_directory, "error_log_file":"error.out"})
+                            fs.task_ = (i,j)
+                            featurization_futures_temp.append(fs)
+                        featurization_futures.append(featurization_futures_temp)
+
+                if fit_mode:
+                    print("FITTING jobs submission...")
+                    for i, b_future in enumerate(b_futures[1:]):  # Loop over cumulative batches of finished vasp jobs
+                        fitting_futures_temp = []
+                        for j in fits:  # Loop over hyperparameters_list
+                            rcut_idx = rcuts_list.index(hyperparameters_list[j][0])
+                            fit_directory = f"{start_path}fits/{i}/"
+                            fit_directory += hyperparameters_to_string(mlip, hyperparameters_list[j], delimiter='_')
+                            os.makedirs(fit_directory, exist_ok=True)
+                            fs = exe.submit(fit, start_path+"features/", featurization_futures[i][rcut_idx], b_future, 
+                                            hyperparameters_list[j], mlip, batch_ID=i,
+                                            resource_dict={"cores": 1, "threads_per_core": ncores_per_fit, 
+                                                        "gpus_per_core": 0, "num_nodes": 1, "cwd": fit_directory,
+                                                        "error_log_file":"error.out"})
+                            fs.task_ = (i,j)
+                            fitting_futures_temp.append(fs)
+                        fitting_futures.append(fitting_futures_temp)  # This is a list of per batch futures lists
+
+                if pareto_mode:
+                    print("COST jobs submission...")
+                    nconfigs4cost = config["MODE"]["nconfigurations_for_cost"]
+                    atoms4cost = exe.batched(entropy_atoms_futures, n=nconfigs4cost)[0]
+                    for i in costs:  # Loop over hyperparameters_list_noeweight
+                        hyperparams = hyperparameters_list_noeweight[i]
+                        rcuts = hyperparams[0]
+                        costs_directory = start_path + "costs/"
+                        costs_directory += hyperparameters_to_string(mlip, hyperparams, delimiter='_', w_eweight=False)
+                        os.makedirs(costs_directory, exist_ok=True)
+                        fs = exe.submit(featurize, atoms4cost, config, fitsnap_config, rcuts, True, hyperparams,
+                                        resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1, 
+                                                    "cwd": costs_directory, "error_log_file":"error.out"})
+                        fs.task_ = i
+                        cost_futures.append(fs)
                     
-            if vasp_mode:
-                print("VASP jobs submission...")
-                for i in vasp_idxs:  # Loop over atomic configuration indices
-                    vasp_ID = vasps[i][0]
-                    input_file = "energy-configs/em_%i.dat"%vasp_ID
-                    vasp_directory = start_path + "vasp-energy/vasp-em_%i/"%vasp_ID
-                    print("Submitting", vasp_ID, "on GPUs", vasp_directory, input_file)
-                    # fs = vasp_exe.submit(fake_vasp, force_energy_filename, vasp_ID, first_index[vasp_ID],
-                    #                 resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1, "cwd": vasp_directory})
-                    fs = vasp_exe.submit(vasp, start_path, start_path+input_file, vasp_ID, first_index[vasp_ID],
-                                         resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                                                        "cwd": vasp_directory, "error_log_file":"error.out"})
-                    # fs = vasp_exe.submit(lammps, start_path, start_path+input_file, vasp_ID, first_index[vasp_ID],
-                    #                      resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                    #                                     "cwd": vasp_directory, "error_log_file":"error.out"})
-                    fs.task_ = i
-                    vasp_futures.append(fs)
+                    print("PARETO jobs submission...")
+                    for i, fitting_futures_per_b in enumerate(fitting_futures):  # Loop over batches of fitting jobs
+                        fs = exe.submit(pareto, start_path, i, fitting_futures_per_b, cost_futures, mlip,
+                                        resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
+                                                    "cwd":start_path+"pareto-front", "error_log_file":"error.out"})
+                        fs.task_ = i
+                        pareto_futures.append(fs)
 
-                batched_vasp_futures = exe.batched(vasp_futures, n=fit_freq)
-                for i, batched_vasp_future in enumerate(batched_vasp_futures):
-                    fs = exe.submit(combine_b, start_path, batched_vasp_future, b_futures[-1],
-                                    resource_dict={"cores": 1, "cwd": start_path+"vasp-energy",
-                                                   "error_log_file":"error.out"})
-                    fs.task_ = i  # DO I REALLY NEED IT??? and even others
-                    b_futures.append(fs)
-
-            if feature_mode:
-                ncores_per_featurization = int((all_ncores - all_ngpus)/len(rs.nodelist)) - 3
-                print("FEATURIZATION jobs submission...")
-                print(f"Number of cores allocated for featurization step is {ncores_per_featurization}")
-                for i in featurizations:  # Loop over rcuts_list indices
-                    rcuts = rcuts_list[i]
-                    feature_directory = start_path + "features/" + rcuts_to_string(rcuts, delimiter='_')
-                    os.makedirs(feature_directory, exist_ok=True)
-                    fs = exe.submit(featurize, df['ase_atoms'].to_list(), config, fitsnap_config, rcuts,
-                                    resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0,
-                                                   "num_nodes": 1, "cwd": feature_directory, "error_log_file":"error.out"})
-                    fs.task_ = i
-                    featurization_futures.append(fs)
-
-            if fit_mode:
-                print("FITTING jobs submission...")
-                for j, b_future in enumerate(b_futures[1:]):  # Loop over cumulative batches of finished vasp jobs
-                    fitting_futures_temp = []
+                if pops_mode:
+                    print("UNCERTAINTY QUANTIFICATION jobs submission...")
                     for i in fits:  # Loop over hyperparameters_list
                         rcut_idx = rcuts_list.index(hyperparameters_list[i][0])
-                        fit_directory = f"{start_path}fits/{j}/"
-                        fit_directory += hyperparameters_to_string(mlip, hyperparameters_list[i], delimiter='_')
-                        os.makedirs(fit_directory, exist_ok=True)
-                        fs = exe.submit(fit, start_path+"features/", featurization_futures[rcut_idx], b_future, 
+                        posp_directory = f"{start_path}pops/"
+                        posp_directory += hyperparameters_to_string(mlip, hyperparameters_list[i], delimiter='_')
+                        os.makedirs(posp_directory, exist_ok=True)
+                        fs = exe.submit(pops, start_path+"features/", featurization_futures[-1][rcut_idx], b_futures[-1], 
                                         hyperparameters_list[i], mlip,
                                         resource_dict={"cores": 1, "threads_per_core": ncores_per_fit, 
-                                                       "gpus_per_core": 0, "num_nodes": 1, "cwd": fit_directory,
-                                                       "error_log_file":"error.out"})
-                        fs.task_ = (i,j)
-                        fitting_futures_temp.append(fs)
-                    fitting_futures.append(fitting_futures_temp)  # This is a list of per batch futures lists
+                                                    "gpus_per_core": 0, "num_nodes": 1, "cwd": posp_directory,
+                                                    "error_log_file":"error.out"})
+                        fs.task_ = i
+                        pops_futures.append(fs)
 
-            if pareto_mode:
-                print("COST jobs submission...")
-                nconfigs4cost = config["MODE"]["nconfigurations_for_cost"]
-                for i in costs:  # Loop over hyperparameters_list_noeweight
-                    hyperparams = hyperparameters_list_noeweight[i]
-                    rcuts = hyperparams[0]
-                    atoms4cost = df["ase_atoms"].sample(n=nconfigs4cost,random_state=42).to_list()
-                    costs_directory = start_path + "costs/"
-                    costs_directory += hyperparameters_to_string(mlip, hyperparams, delimiter='_', w_eweight=False)
-                    os.makedirs(costs_directory, exist_ok=True)
-                    fs = exe.submit(featurize, atoms4cost, config, fitsnap_config, rcuts, True, hyperparams,
-                                    resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1, 
-                                                   "cwd": costs_directory, "error_log_file":"error.out"})
-                    fs.task_ = i
-                    cost_futures.append(fs)
-                
-                print("PARETO jobs submission...")
-                for i, fitting_futures_per_b in enumerate(fitting_futures):  # Loop over batches of fitting jobs
-                    fs = exe.submit(pareto, start_path, i, fitting_futures_per_b, cost_futures, mlip,
-                                    resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                                                   "cwd":start_path+"pareto-front", "error_log_file":"error.out"})
-                    fs.task_ = i
-                    pareto_futures.append(fs)
+                b_futures = b_futures[1:]
+                num_b_futures = len(b_futures)
+                while len(pareto_futures):
 
-            if pops_mode:
-                print("UNCERTAINTY QUANTIFICATION jobs submission...")
-                for i in fits:  # Loop over hyperparameters_list
-                    rcut_idx = rcuts_list.index(hyperparameters_list[i][0])
-                    posp_directory = f"{start_path}pops/"
-                    posp_directory += hyperparameters_to_string(mlip, hyperparameters_list[i], delimiter='_')
-                    os.makedirs(posp_directory, exist_ok=True)
-                    fs = exe.submit(pops, start_path+"features/", featurization_futures[rcut_idx], b_futures[-1], 
-                                    hyperparameters_list[i], mlip,
-                                    resource_dict={"cores": 1, "threads_per_core": ncores_per_fit, 
-                                                "gpus_per_core": 0, "num_nodes": 1, "cwd": posp_directory,
-                                                "error_log_file":"error.out"})
-                    fs.task_ = i
-                    pops_futures.append(fs)
+                    if entropy_mode:
+                        entropy_atoms_futures = check_and_print_status(entropy_atoms_futures,
+                                                                       "ENTROPY", num_configurations)
 
-            b_futures = b_futures[1:]
-            num_b_futures = len(b_futures)
-            while len(pareto_futures):
+                    if feature_mode: 
+                        featurization_futures = check_and_print_status(featurization_futures, "FEATURIZATION",
+                                                                       len(featurizations), list_of_lists=True)
 
-                if feature_mode: 
-                    featurization_futures = check_and_print_status(featurization_futures, "FEATURIZATION", len(featurizations))
+                    if vasp_mode: vasp_futures = check_and_print_status(vasp_futures, "VASP", num_configurations)
 
-                if vasp_mode: vasp_futures = check_and_print_status(vasp_futures, "VASP", len(vasp_idxs))
+                    if vasp_mode: b_futures = check_and_print_status(b_futures, "B_COLLECTING", num_b_futures)
 
-                if vasp_mode: b_futures = check_and_print_status(b_futures, "B_COLLECTING", num_b_futures)
+                    if fit_mode: fitting_futures = check_and_print_status(fitting_futures, "FITTING", len(fits), list_of_lists=True)
 
-                if fit_mode: fitting_futures = check_and_print_status(fitting_futures, "FITTING", len(fits), list_of_lists=True)
+                    if pareto_mode: cost_futures = check_and_print_status(cost_futures, "COST", len(costs))
 
-                if pareto_mode: cost_futures = check_and_print_status(cost_futures, "COST", len(costs))
+                    if pareto_mode: pareto_futures = check_and_print_status(pareto_futures, "PARETO", num_b_futures)
 
-                if pareto_mode: pareto_futures = check_and_print_status(pareto_futures, "PARETO", num_b_futures)
-
-                # with open("checkpoint.pkl", "wb") as f:
-                #     pickle.dump((vasp_futures, featurization_futures, fitting_futures, cost_futures), f)
+                    # with open("checkpoint.pkl", "wb") as f:
+                    #     pickle.dump((vasp_futures, featurization_futures, fitting_futures, cost_futures), f)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,3 @@
-import autopiad.entropy.binary.calculator as entropy
-from autopiad.entropy.binary.model import CNModel, CNManager
 import numpy as np
 import random
 import pickle
@@ -10,6 +8,8 @@ from ase.optimize.bfgslinesearch import BFGSLineSearch
 from ase.calculators.lammpslib import LAMMPSlib
 from ase.data import covalent_radii, atomic_numbers
 
+import autopiad.binary_entropy.calculator as entropy
+from autopiad.binary_entropy.model import CNModel, CNManager
 # from pybispectrum import calc_bispectrum_names
 
 
@@ -141,8 +141,8 @@ class EntropyMaximizer:
         self.n_cond_all = []
         self.n_cond_acc = []
 
-        self.energy_mode=False
-        self.strict_entropy_decrease=True
+        self.energy_mode = False
+        self.strict_entropy_decrease = True
 
         self.generate_min_t =\
         """
@@ -178,7 +178,7 @@ class EntropyMaximizer:
 
         self.core_radius_W  = NN_dists["Pu"]
         core_radii_Be  = NN_dists["Sb"]*np.arange(0.7, 1.8, 0.18)
-        NN_dists_WBe   = NN_dists["Pu"]/2. + NN_dists["Sb"]/2.
+        NN_dists_WBe = NN_dists["Pu"]/2. + NN_dists["Sb"]/2.
         core_radii_WBe = NN_dists_WBe*np.arange(0.7, 1.8, 0.18)
         radii_to_sample = [[c_Be, c_WBe] for c_Be in core_radii_Be for c_WBe in core_radii_WBe]
 
@@ -192,7 +192,6 @@ class EntropyMaximizer:
         # core_radius_Be  = self.rad[0]
         # core_radius_WBe = self.rad[1]
         self.core_radius_Be, self.core_radius_WBe = radii_to_sample[sl]
-
 
         # min_distance_W   = self.core_radius_W*0.9
         # min_distance_Be  = self.core_radius_Be*0.9
@@ -211,7 +210,7 @@ class EntropyMaximizer:
     
     def looping(self):
         for i in range(5000):
-            self.create_configuration()
+            yield from self.create_configuration(i)
 
         pickle.dump(self.manager.data, open("d-opti.p", "wb"))
 
@@ -228,18 +227,18 @@ class EntropyMaximizer:
         min_distance_WBe = self.core_radius_WBe*0.9
 
         Volume_W = ((np.sqrt(2)*self.core_radius_W)**3)/4.
-        Volume_Be      = ((np.sqrt(2)*self.core_radius_Be)**3)/4.
-        Volume_WBe     = (n_Be*Volume_Be + (n_atoms-n_Be)*Volume_W)/n_atoms
-        target_volume  = Volume_WBe*random.uniform(1.0, 2.0)
-        #target_volume  = Volume_WBe*random.uniform(np.round(0.9**3, 2), 1.8)
+        Volume_Be = ((np.sqrt(2)*self.core_radius_Be)**3)/4.
+        Volume_WBe = (n_Be*Volume_Be + (n_atoms-n_Be)*Volume_W)/n_atoms
+        target_volume = Volume_WBe*random.uniform(1.0, 2.0)
+        #target_volume = Volume_WBe*random.uniform(np.round(0.9**3, 2), 1.8)
 
-        print(n_atoms, shape, n_Be, target_volume)
+        print(n_atoms, n_Be, shape, target_volume)
 
         symbols = int(n_Be)*["Sb"] + int(n_atoms-n_Be)*["Pu"]
 
         # TODO: Shouldn't it be manager.mean instead of mean which I presume comes from random distribution?
-        model=CNModel(self.n_elems, self.n_descriptors_tot, energy_mode=self.energy_mode, populations=None, mask=None,
-                    cross_=self.manager.cross, renorm_=self.renorm, mean_=self.mean, count_=self.manager.count, epsilon_=self.epsilon)
+        model = CNModel(self.n_elems, self.n_descriptors_tot, energy_mode=self.energy_mode, populations=None, mask=None,
+                        cross_=self.manager.cross, renorm_=self.renorm, mean_=self.mean, count_=self.manager.count, epsilon_=self.epsilon)
 
         if self.i_accept<10:
             model.active=False
@@ -296,6 +295,7 @@ class EntropyMaximizer:
             print("Results:i, diff: ", i, cand_det-self.current_det)
 
             if self.i_accept<=10 and dists_cond:
+                yield atoms
                 self.manager.update(d)
                 current_cond,self.current_det=self.manager.evaluate()
                 print("***CANDIDATE:", cand_cond, cand_det, "CURRENT:", current_cond, self.current_det)
@@ -309,6 +309,7 @@ class EntropyMaximizer:
                     self.n_cond_acc.append(current_cond)
             else:
                 if dists_cond and ((self.strict_entropy_decrease and cand_det < self.current_det) or not self.strict_entropy_decrease):
+                    yield atoms
                     self.n_reject_dist=0
                     self.n_reject_improve=0
                     self.manager.update(d)

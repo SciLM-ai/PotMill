@@ -9,8 +9,8 @@ drcinner = 0.01 0.01 0.01 0.01
 bzeroflag = 0
 ranks = 1 2
 lmin = 0 0
-lmax =  1 2
-nmax =  22 3
+lmax =  0 1
+nmax =  6 3
 nmaxbase = 22
 
 [CALCULATOR]
@@ -49,7 +49,4 @@ scraper = JSON
 
 [OUTFILE]
 output_style = PACE
-
-[PATH]
-dataPath = entropy-set/df_W_Re_WRe_free_energies_shifted.pckl.gzip
 

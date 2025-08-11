@@ -1,12 +1,15 @@
 [MODE]
 resume = 0
-vasp = 1
+entropy = 1
 featurize = 1
+vasp = 1
 fit = 1
 pareto = 1
+pops = 1
 fit_freq = 100
 auto_reduce_hyperparameters = 0
 ncores_per_fit = 5
+nconfigurations_for_cost = 100
 
 [FitSNAP]
 mlip = ACE
@@ -30,7 +33,3 @@ max_lmax = 0 2
 middle_eweight = 10
 num_eweights = 3
 constant = 1
-
-[DATA]
-data_path = entropy-set/df_W_Re_WRe_free_energies_shifted.pckl.gzip
-format = ase

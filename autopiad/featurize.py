@@ -1,5 +1,5 @@
 
-def featurize(atoms_traj, config, fitsnap_config, rcuts, only_cost=False, hyperparameters_noeweight=None):
+def featurize(atoms_traj, config, fitsnap_config, rcuts, only_cost=False, hyperparameters_noeweight=None, batch_ID=None):
 
     import os
     import numpy as np
@@ -36,7 +36,10 @@ def featurize(atoms_traj, config, fitsnap_config, rcuts, only_cost=False, hyperp
     if rank == 0:
         os.system("rm -rf coupling_coefficients.yace *.pickle")
         if not only_cost:
-            np.save("a.npy", fs.pt.shared_arrays["a"].array)
+            if batch_ID:
+                np.save(f"a_{batch_ID}.npy")
+            else:
+                np.save("a.npy", fs.pt.shared_arrays["a"].array)
         
             bnames = []
             if config['FitSNAP']['mlip'] == "ACE":

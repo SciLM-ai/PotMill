@@ -1,6 +1,7 @@
 import numpy as np
 import os, glob, sys, json
 import xml.etree.ElementTree as ET
+from ase import Atoms
 from ase.calculators.vasp import Vasp
 from ase.io import read, write
 from shutil import make_archive
@@ -136,7 +137,10 @@ def vasp(start_path, input_file, job_id, first_index):
         except:
             raise
 
-    atoms = read(input_file, index=0, format='vasp')
+    if isinstance(input_file, Atoms):
+        atoms = input_file
+    else:
+        atoms = read(input_file, index=0, format='vasp')
     atoms.pbc = True
     atoms.calc = calc
 

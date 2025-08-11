@@ -127,23 +127,23 @@ def generate_random_cell(atom_numbers, target_volume, shape=[1,1,1], ratio_of_co
     cell = ase.cell.Cell.fromcellpar([a[0],a[1],a[2], angles[0], angles[1], angles[2]])
     #scale the box to reach the target density with the target number of atoms
     #overshoot the volume at first to make things easier
-    current_volume=cell.volume/n_atoms
-    cell=ase.cell.Cell(cell*((1.3*target_volume/current_volume)**0.33333333))
-    current_volume=cell.volume/n_atoms
+    current_volume = cell.volume/n_atoms
+    cell = ase.cell.Cell(cell*((1.3*target_volume/current_volume)**0.33333333))
+    current_volume = cell.volume/n_atoms
     #print(target_volume,current_volume,flush=True)
 
     #fill box with atoms
-    slab=ase.Atoms()
-    slab.cell=cell
+    slab = ase.Atoms()
+    slab.cell = cell
     slab.set_pbc([True, True, True])
     unique_atom_types = list(set([ x if isinstance(x,int) else  atomic_numbers[x] for x in atom_numbers ]))
     blmin = closest_distances_generator(atom_numbers=unique_atom_types,ratio_of_covalent_radii=ratio_of_covalent_radii)
-    print (blmin)
+    print(blmin)
     sg = StartGenerator(slab, atom_numbers, blmin)
-    atoms=sg.get_new_candidate(maxiter=1000)
+    atoms = sg.get_new_candidate(maxiter=1000)
     #use pbc by default
     atoms.set_pbc([True, True, True])
-    current_volume=atoms.get_volume()/n_atoms
+    current_volume = atoms.get_volume()/n_atoms
     #fix the volume
     atoms.set_cell(atoms.get_cell()*(target_volume/current_volume)**0.33333333,scale_atoms=True)
 
