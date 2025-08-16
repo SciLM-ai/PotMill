@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from ase.io import write
 from ase.optimize.bfgslinesearch import BFGSLineSearch
 from ase.calculators.lammpslib import LAMMPSlib
+from ase.calculators.lammpsrun import LAMMPS
 from ase.data import covalent_radii, atomic_numbers
 
 import autopiad.binary_entropy.calculator as entropy
@@ -61,8 +62,8 @@ def get_AB_distances(atoms):
     cell_lengths = atoms.cell.lengths()
     
     symbols = atoms.get_chemical_symbols()
-    indices_Be = [ind for ind in range(len(symbols)) if symbols[ind]=="Sb"]
-    indices_W  = [ind for ind in range(len(symbols)) if symbols[ind]=="Pu"]
+    indices_Be = [ind for ind in range(len(symbols)) if symbols[ind]=="Re"]
+    indices_W  = [ind for ind in range(len(symbols)) if symbols[ind]=="W"]
     
     if len(atoms) == 2:
         dists_WBe = [dists[i][j] for i in indices_Be for j in indices_W]
@@ -95,7 +96,7 @@ def write_mliap_descriptor(rcutfac=4.67637, twojmax=6, radelems="0.5 0.5"):
         f.write("twojmax {} \n".format(twojmax))
         f.write("# elements\n")
         f.write("nelems 2\n")
-        f.write("elems Sb Pu \n")
+        f.write("elems Re W \n")
         #f.write("type Be W \n")
         f.write("radelems {} \n".format(radelems))
         f.write("welems 1 1\n")
@@ -110,8 +111,8 @@ class EntropyMaximizer:
 
     def __init__(self):
 
-        rcut_W = NN_dists["Pu"]*2
-        rcut_Be = NN_dists["Sb"]*2
+        rcut_W = NN_dists["W"]*2
+        rcut_Be = NN_dists["Re"]*2
         radelems_W  = 0.5
         radelems_Be = np.round((rcut_Be*radelems_W)/rcut_W, 4)
         radelems = str(radelems_Be) + " " + str(radelems_W)
@@ -144,15 +145,6 @@ class EntropyMaximizer:
         self.energy_mode = False
         self.strict_entropy_decrease = True
 
-        self.generate_min_t =\
-        """
-        pair_style hybrid/overlay soft 5 mliap model mliappy LATER descriptor sna WBe.mliap.descriptor
-        pair_coeff 1 1 soft 10 %f
-        pair_coeff 1 2 soft 10 %f
-        pair_coeff 2 2 soft 10 %f
-        pair_coeff * * mliap Sb Pu
-        """
-
         self.generate_zero_t =\
         """
         pair_style soft 5.0
@@ -160,32 +152,40 @@ class EntropyMaximizer:
         pair_coeff 1 2 8 %f
         pair_coeff 2 2 5 %f
         """
+
+        self.generate_min_t =\
+        """
+        pair_style hybrid/overlay soft 5 mliap model mliappy LATER descriptor sna WBe.mliap.descriptor
+        pair_coeff 1 1 soft 10 %f
+        pair_coeff 1 2 soft 10 %f
+        pair_coeff 2 2 soft 10 %f
+        pair_coeff * * mliap Re W
+        """
         
-        # TODO: Figure out this renorm path thing
-        path_renorm = "/vast/home/apasubramanyam/Work/Entropy/binaries_new/Pu-Sb/renorm_configs_matrix/"
-        random_data = pickle.load(open(path_renorm+"random-ref-data.p", "rb"))
-        random_manager = pickle.load(open(path_renorm+"random-manager.p", "rb" ))
+        # path_renorm = "/vast/home/apasubramanyam/Work/Entropy/binaries_new/W-Re/renorm_configs_matrix/"
+        random_data = pickle.load(open("random-ref-data.p", "rb"))
+        random_manager = pickle.load(open("random-manager.p", "rb" ))
         self.mean = random_manager.sum/random_manager.count
-        self.renorm = pickle.load(open(path_renorm+"renormalization_matrix.pckl", "rb"))
+        self.renorm = pickle.load(open("renormalization_matrix.pckl", "rb"))
 
         #aggregates the mean and covariances from multiple configurations
         self.manager = CNManager(self.n_descriptors_tot,energy_mode=self.energy_mode,mean=self.mean,renorm=self.renorm,epsilon=self.epsilon)
 
         self.n_elems = 2
-        self.atom_types = {"Sb":1, "Pu":2}
+        self.atom_types = {"Re":1, "W":2}
         self.shapes = [[4, 1, 1], [1, 1, 1], [3, 3, 1]]
         self.N_atoms = range(2, 26)
 
-        self.core_radius_W  = NN_dists["Pu"]
-        core_radii_Be  = NN_dists["Sb"]*np.arange(0.7, 1.8, 0.18)
-        NN_dists_WBe = NN_dists["Pu"]/2. + NN_dists["Sb"]/2.
+        self.core_radius_W  = NN_dists["W"]
+        core_radii_Be  = NN_dists["Re"]*np.arange(0.7, 1.8, 0.18)
+        NN_dists_WBe = NN_dists["W"]/2. + NN_dists["Re"]/2.
         core_radii_WBe = NN_dists_WBe*np.arange(0.7, 1.8, 0.18)
         radii_to_sample = [[c_Be, c_WBe] for c_Be in core_radii_Be for c_WBe in core_radii_WBe]
 
         print(len(radii_to_sample), 
-            "\nPu:", self.core_radius_W, 
-            "\nSb:", core_radii_Be, 
-            "\nPuSb:", core_radii_WBe)
+            "\nW:", self.core_radius_W, 
+            "\nRe:", core_radii_Be, 
+            "\nWRe:", core_radii_WBe)
 
         sl = 10
         # self.rad = radii_to_sample[sl]
@@ -202,9 +202,9 @@ class EntropyMaximizer:
         # Volume_WBe2    = ((np.sqrt(2)*self.core_radius_WBe)**3)/4.
         # target_volume  = Volume_WBe*random.uniform(1.0, 2.0)
 
-        # print("core radius: Pu, Sb, PuSb", self.core_radius_W, self.core_radius_Be, self.core_radius_WBe)
-        # print("Min dist: Pu, Sb, PuSb", min_distance_W, min_distance_Be, min_distance_WBe)
-        # print("Volumes: Pu, Sb, PuSb: ", Volume_W, Volume_Be, Volume_WBe, Volume_WBe2)
+        # print("core radius: W, Re, WRe", self.core_radius_W, self.core_radius_Be, self.core_radius_WBe)
+        # print("Min dist: W, Re, WRe", min_distance_W, min_distance_Be, min_distance_WBe)
+        # print("Volumes: W, Re, WRe: ", Volume_W, Volume_Be, Volume_WBe, Volume_WBe2)
         # print("target volume:", Volume_WBe, Volume_WBe2, Volume_WBe*1.0, Volume_WBe*2.0)
 
     
@@ -222,8 +222,8 @@ class EntropyMaximizer:
         n_Be       = random.choice(allowed_Be)
         Be_conc    = float(n_Be/n_atoms)
 
-        min_distance_W   = self.core_radius_W*0.9
-        min_distance_Be  = self.core_radius_Be*0.9
+        min_distance_W = self.core_radius_W*0.9
+        min_distance_Be = self.core_radius_Be*0.9
         min_distance_WBe = self.core_radius_WBe*0.9
 
         Volume_W = ((np.sqrt(2)*self.core_radius_W)**3)/4.
@@ -234,7 +234,7 @@ class EntropyMaximizer:
 
         print(n_atoms, n_Be, shape, target_volume)
 
-        symbols = int(n_Be)*["Sb"] + int(n_atoms-n_Be)*["Pu"]
+        symbols = int(n_Be)*["Re"] + int(n_atoms-n_Be)*["W"]
 
         # TODO: Shouldn't it be manager.mean instead of mean which I presume comes from random distribution?
         model = CNModel(self.n_elems, self.n_descriptors_tot, energy_mode=self.energy_mode, populations=None, mask=None,
@@ -249,9 +249,9 @@ class EntropyMaximizer:
 
         generate_zero = self.generate_zero_t % (min_distance_Be, min_distance_WBe, min_distance_W)
         calculator_relax = LAMMPSlib(lmpcmds=generate_zero.split("\n"),
-                                    log_file=None,
-                                    keep_alive=True,
-                                    atom_types=self.atom_types)
+                                     log_file=None,
+                                     keep_alive=True,
+                                     atom_types=self.atom_types)
 
         generate_min = self.generate_min_t % (self.core_radius_Be, self.core_radius_WBe, self.core_radius_W)
         calculator_min = entropy.EntropyCalculator(lmpcmds=generate_min.split("\n"),
@@ -268,13 +268,13 @@ class EntropyMaximizer:
             #relax with the core repulsion alone
             print("Relaxing with core repulsion")
             atoms.calc = calculator_relax
-            opt = BFGSLineSearch(atoms, force_consistent=True,logfile=None)#logfile="log_relax")
+            opt = BFGSLineSearch(atoms, force_consistent=True, logfile=None)#logfile="log_relax")
             opt.run(fmax=0.05, steps=50)
 
             #relax with the entropy model overlapped with the repulsion
             print("Relaxing with entropy model")
             atoms.calc = calculator_min
-            opt = BFGSLineSearch(atoms, force_consistent=True,logfile=None)#logfile="log_entropy_model")
+            opt = BFGSLineSearch(atoms, force_consistent=True, logfile=None)#logfile="log_entropy_model")
             opt.run(fmax=0.05, steps=50)
 
             print("Compute descriptors and evaluate det")

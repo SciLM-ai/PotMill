@@ -72,8 +72,8 @@ def get_AB_distances(atoms):
     cell_lengths = atoms.cell.lengths()
     
     symbols = atoms.get_chemical_symbols()
-    indices_Be = [ind for ind in range(len(symbols)) if symbols[ind]=="Sb"]
-    indices_W  = [ind for ind in range(len(symbols)) if symbols[ind]=="Pu"]
+    indices_Be = [ind for ind in range(len(symbols)) if symbols[ind]=="Re"]
+    indices_W  = [ind for ind in range(len(symbols)) if symbols[ind]=="W"]
     
     if len(atoms) == 2:
         dists_WBe = [dists[i][j] for i in indices_Be for j in indices_W]
@@ -105,7 +105,7 @@ def write_mliap_descriptor(rcutfac=4.67637, twojmax=6, radelems="0.5 0.5"): #4.8
         f.write("twojmax {} \n".format(twojmax))
         f.write("# elements\n")
         f.write("nelems 2\n")
-        f.write("elems Sb Pu \n")
+        f.write("elems Re W \n")
         #f.write("type Be W \n")
         f.write("radelems {} \n".format(radelems))
         f.write("welems 1 1\n")
@@ -120,8 +120,8 @@ class RandomEntropyInitializer:
 
     def __init__(self):
 
-        rcut_W = NN_dists["Pu"]*2 #4.67637
-        rcut_Be = NN_dists["Sb"]*2
+        rcut_W = NN_dists["W"]*2 #4.67637
+        rcut_Be = NN_dists["Re"]*2
         radelems_W  = 0.5
         radelems_Be = np.round((rcut_Be*radelems_W)/rcut_W, 4)
         radelems = str(radelems_Be) + " " + str(radelems_W)
@@ -148,7 +148,7 @@ class RandomEntropyInitializer:
         pair_coeff 1 1 10 %f
         pair_coeff 1 2 8 %f
         pair_coeff 2 2 5 %f
-        """ 
+        """
 
         self.generate_min_t =\
         """
@@ -156,17 +156,17 @@ class RandomEntropyInitializer:
         pair_coeff 1 1 soft 10 %f
         pair_coeff 1 2 soft 10 %f
         pair_coeff 2 2 soft 10 %f
-        pair_coeff * * mliap Sb Pu
+        pair_coeff * * mliap Re W
         """
 
-        self.core_radius_W  = NN_dists["Pu"]
-        self.core_radii_Be  = NN_dists["Sb"]*np.arange(0.7, 1.8, 0.15)
-        NN_dists_WBe = NN_dists["Pu"]/2. + NN_dists["Sb"]/2.
+        self.core_radius_W  = NN_dists["W"]
+        self.core_radii_Be  = NN_dists["Re"]*np.arange(0.7, 1.8, 0.15)
+        NN_dists_WBe = NN_dists["W"]/2. + NN_dists["Re"]/2.
         self.core_radii_WBe = NN_dists_WBe*np.arange(0.7, 1.8, 0.15)
         self.radii_to_sample = [[c_Be, c_WBe] for c_Be in self.core_radii_Be for c_WBe in self.core_radii_WBe]
 
         self.n_elems=2
-        self.atom_types={"Sb":1, "Pu":2}
+        self.atom_types={"Re":1, "W":2}
 
         self.N_atoms = range(2, 26)
         self.shapes=[[4, 1, 1], [1, 1, 1], [3, 3, 1]]
@@ -185,7 +185,7 @@ class RandomEntropyInitializer:
         self.target_D = []
         i=0
         while i<100:
-            self.create_configuration(i)
+            i=self.create_configuration(i)
 
         mean = self.manager_random.sum/self.manager_random.count
         covariance = self.manager_random.cross/self.manager_random.count-np.outer(mean,mean)
@@ -194,8 +194,8 @@ class RandomEntropyInitializer:
 
         pickle.dump(renorm, open("renormalization_matrix.pckl", "wb"))
 
-        pickle.dump(self.manager_random.data, open( "random-ref-data.p", "wb" ) )
-        pickle.dump(self.manager_random, open( "random-manager.p", "wb" ) )
+        pickle.dump(self.manager_random.data, open("random-ref-data.p", "wb"))
+        pickle.dump(self.manager_random, open("random-manager.p", "wb"))
 
 
     def create_configuration(self, i):
@@ -221,11 +221,11 @@ class RandomEntropyInitializer:
         print(n_atoms, n_Be, shape, target_volume)
         print(min_distance_W, min_distance_Be, min_distance_WBe)
 
-        symbols = int(n_Be)*["Sb"] + int(n_atoms-n_Be)*["Pu"]
+        symbols = int(n_Be)*["Re"] + int(n_atoms-n_Be)*["W"]
 
         generate_zero = self.generate_zero_t % (min_distance_Be, min_distance_WBe, min_distance_W)
         calculator_relax = LAMMPSlib(lmpcmds=generate_zero.split("\n"),
-                                    log_file=None,
+                                    log_file="lammpslog",
                                     keep_alive=True,
                                     atom_types=self.atom_types)
 
@@ -247,7 +247,7 @@ class RandomEntropyInitializer:
             #relax with the core repulsion alone
             print("Relaxing with core repulsion")
             atoms.calc = calculator_relax
-            opt = BFGSLineSearch(atoms, force_consistent=True,logfile="log_relax")
+            opt = BFGSLineSearch(atoms, force_consistent=True, logfile="log_relax")
             opt.run(fmax=0.05, steps=50)
             
             #No optimizing with the entropy model
@@ -273,3 +273,5 @@ class RandomEntropyInitializer:
             pass
         
         print("\n")
+
+        return i

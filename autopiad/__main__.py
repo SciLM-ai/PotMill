@@ -12,6 +12,7 @@ from autopiad.pareto import pareto
 from autopiad.pops import pops
 import flux
 import concurrent.futures
+import flux.job
 from executorlib import FluxJobExecutor
 
 
@@ -32,13 +33,18 @@ def check_and_print_status(futures, name, total, list_of_lists=False):
     return futures
 
 
-def combine_b(start_path, vasp_IDs_finished, vasp_IDs_ready_for_fit):
+def combine_b(start_path, vasp_results, vasp_IDs_ready_for_fit):
+    vasp_IDs_finished = vasp_results["job_ID"]
     print("Starting b.csv file preparation for the fit...")
     new_b_files = " ".join(["vasp-em_%i/b" % job_id for job_id in vasp_IDs_finished])
     new_vasp_IDs_ready_for_fit = vasp_IDs_ready_for_fit + vasp_IDs_finished
     len1, len2 = len(vasp_IDs_ready_for_fit), len(new_vasp_IDs_ready_for_fit)
     os.system(f"cat {start_path}features/b{len1}.csv {new_b_files} > {start_path}features/b{len2}.csv")
     return new_vasp_IDs_ready_for_fit
+
+
+def init_atoms_from_entropy():
+    return {"entropy_iterator": max_entropy_atoms_iterator()}
 
 
 def next_atoms_from_entropy(entropy_iterator):
@@ -102,7 +108,7 @@ def main():
         os.system("rm -rf "+start_path+"pops")
         os.mkdir(start_path+"pops")
 
-    num_configurations = 20
+    num_configurations = 500
 
     if resume_mode and os.path.isfile("checkpoint.pkl"):
         with open("checkpoint.pkl", "rb") as f:
@@ -115,6 +121,7 @@ def main():
         fits = [i for i in range(len(hyperparameters_list))] if fit_mode else []
         costs = [i for i in range(len(hyperparameters_list_noeweight))] if pareto_mode else []
 
+    if entropy_mode: entropy_atoms_futures = []
     if feature_mode: featurization_futures = []
     if vasp_mode: vasp_futures = []
     if vasp_mode: b_futures = [[]]  # [[]] is not a bug it is for b_futures[-1] to work
@@ -128,26 +135,26 @@ def main():
 
         with FluxJobExecutor(flux_log_files=True, cache_directory=start_path+'runs') as exe:
             
-            with FluxJobExecutor(init_function=max_entropy_atoms_iterator, block_allocation=True, max_workers=1) as entropy_exe:
+            with FluxJobExecutor(init_function=init_atoms_from_entropy, block_allocation=True, max_workers=1,
+                                 resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
+                                                "cwd": start_path+"entropy", "error_log_file":"error.out"}) as entropy_exe:
 
                 if entropy_mode:
                     print("Entropy jobs submission...")
-                    entropy_atoms_futures = [entropy_exe.submit(next_atoms_from_entropy) for _ in range(num_configurations)]
+                    for i in range(num_configurations):
+                        fs = entropy_exe.submit(next_atoms_from_entropy)
+                        fs.task_ = i
+                        entropy_atoms_futures.append(fs)
+                    # entropy_atoms_futures = [entropy_exe.submit(next_atoms_from_entropy) for _ in range(num_configurations)]
 
                 if vasp_mode:
                     print("VASP jobs submission...")
-                    first_index = [0]
                     for i, entropy_atoms in enumerate(entropy_atoms_futures):  # Loop over atomic configuration indices
                         vasp_directory = start_path + "vasp-energy/vasp-em_%i/"%i
                         os.makedirs(vasp_directory, exist_ok=True)
-                        # fs = vasp_exe.submit(fake_vasp, force_energy_filename, vasp_ID, first_index[vasp_ID],
-                        #                 resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1, "cwd": vasp_directory})
-                        fs = vasp_exe.submit(vasp, start_path, entropy_atoms, i, first_index[i],
-                                            resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
+                        fs = vasp_exe.submit(vasp, start_path, entropy_atoms, i, 0,
+                                             resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
                                                             "cwd": vasp_directory, "error_log_file":"error.out"})
-                        # fs = vasp_exe.submit(lammps, start_path, start_path+input_file, vasp_ID, first_index[vasp_ID],
-                        #                      resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                        #                                     "cwd": vasp_directory, "error_log_file":"error.out"})
                         fs.task_ = i
                         vasp_futures.append(fs)
 
@@ -156,7 +163,7 @@ def main():
                         fs = exe.submit(combine_b, start_path, batched_vasp_future, b_futures[-1],
                                         resource_dict={"cores": 1, "cwd": start_path+"vasp-energy",
                                                     "error_log_file":"error.out"})
-                        fs.task_ = i  # DO I REALLY NEED IT??? and even others
+                        fs.task_ = i
                         b_futures.append(fs)
 
                 if feature_mode:
@@ -164,13 +171,13 @@ def main():
                     print("FEATURIZATION jobs submission...")
                     print(f"Number of cores allocated for featurization step is {ncores_per_featurization}")
                     for i, batched_vasp_future in enumerate(batched_vasp_futures):
-                        entropy_atoms = [entropy_atoms_futures[vasp_future.task_] for vasp_future in batched_vasp_future]
+                        # entropy_atoms = [entropy_atoms_futures[vasp_future.task_] for vasp_future in batched_vasp_future]
                         featurization_futures_temp = []
                         for j in featurizations:  # Loop over rcuts_list indices
                             rcuts = rcuts_list[j]
                             feature_directory = start_path + "features/" + rcuts_to_string(rcuts, delimiter='_')
                             os.makedirs(feature_directory, exist_ok=True)
-                            fs = exe.submit(featurize, entropy_atoms, config, fitsnap_config, rcuts, batch_ID=i,
+                            fs = exe.submit(featurize, batched_vasp_future, config, fitsnap_config, rcuts, batch_ID=i,
                                             resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0,
                                                         "num_nodes": 1, "cwd": feature_directory, "error_log_file":"error.out"})
                             fs.task_ = (i,j)

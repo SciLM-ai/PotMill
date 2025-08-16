@@ -30,7 +30,8 @@ def fit(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamete
     a_matr = []
     if batch_ID:
         for id in range(batch_ID+1):
-            a_matr_map = np.load(f"{features_directory}{rcuts_to_string(rcuts,delimiter="_")}/a_{id}.npy", mmap_mode='r')
+            a_matr_map = np.load(features_directory + rcuts_to_string(rcuts,delimiter="_")+"/a_" + str(id) + ".npy",
+                                 mmap_mode='r')
             a_matr.append(a_matr_map[:,feature_indices])
         a_matr = np.concatenate(a_matr)
     else:

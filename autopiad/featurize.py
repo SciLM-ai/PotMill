@@ -11,7 +11,7 @@ def featurize(atoms_traj, config, fitsnap_config, rcuts, only_cost=False, hyperp
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
-    
+    if isinstance(atoms_traj, dict): atoms_traj = atoms_traj["atoms"]
     configs_num = len(atoms_traj)
     ratio = configs_num//size
     rem = configs_num%size
