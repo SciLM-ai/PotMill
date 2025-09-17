@@ -113,6 +113,7 @@ def convert_xml_to_jason(xml_file, JSON_file):
 
 
 def vasp(start_path, input_file, job_id, first_index):
+    print(start_path, input_file, job_id, first_index)
 
     os.environ['VASP_PP_PATH'] = "/users/baghishov/pyiron/resources/vasp/potentials/"
     os.environ['VASP_COMMAND'] = start_path+"run_vasp_6.3.2_std_ase.sh > vasp_output.log 2>&1"
@@ -163,7 +164,7 @@ def vasp(start_path, input_file, job_id, first_index):
         #look into using Custodian here to do error detection/validation
 
         #write a json file for fitsnap
-        convert_xml_to_jason("vasprun.xml","atoms_%i_" % job_id )
+        convert_xml_to_jason("vasprun.xml", "atoms_%i_" % job_id )
 
         try:
             #do some cleanup

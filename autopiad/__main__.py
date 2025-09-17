@@ -135,7 +135,7 @@ def main():
 
         with FluxJobExecutor(flux_log_files=True, cache_directory=start_path+'runs') as exe:
             
-            with FluxJobExecutor(init_function=init_atoms_from_entropy, block_allocation=True, max_workers=1,
+            with FluxJobExecutor(flux_log_files=True, init_function=init_atoms_from_entropy, block_allocation=True, max_workers=1,
                                  resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
                                                 "cwd": start_path+"entropy", "error_log_file":"error.out"}) as entropy_exe:
 
@@ -162,7 +162,7 @@ def main():
                     for i, batched_vasp_future in enumerate(batched_vasp_futures):
                         fs = exe.submit(combine_b, start_path, batched_vasp_future, b_futures[-1],
                                         resource_dict={"cores": 1, "cwd": start_path+"vasp-energy",
-                                                    "error_log_file":"error.out"})
+                                                       "error_log_file":"error.out"})
                         fs.task_ = i
                         b_futures.append(fs)
 

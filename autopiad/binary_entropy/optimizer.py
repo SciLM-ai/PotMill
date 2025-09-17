@@ -1,7 +1,6 @@
 import numpy as np
 import random
 import pickle
-import matplotlib.pyplot as plt
 
 from ase.io import write
 from ase.optimize.bfgslinesearch import BFGSLineSearch
@@ -160,6 +159,7 @@ class EntropyMaximizer:
         pair_coeff 1 2 soft 10 %f
         pair_coeff 2 2 soft 10 %f
         pair_coeff * * mliap Re W
+        compute pe_peratom all pe/atom
         """
         
         # path_renorm = "/vast/home/apasubramanyam/Work/Entropy/binaries_new/W-Re/renorm_configs_matrix/"
@@ -240,12 +240,12 @@ class EntropyMaximizer:
         model = CNModel(self.n_elems, self.n_descriptors_tot, energy_mode=self.energy_mode, populations=None, mask=None,
                         cross_=self.manager.cross, renorm_=self.renorm, mean_=self.mean, count_=self.manager.count, epsilon_=self.epsilon)
 
-        if self.i_accept<10:
-            model.active=False
-            model.K=0.0
+        if self.i_accept < 10:
+            model.active = False
+            model.K = 0.0
         else:
-            model.active=True
-            model.K=self.K
+            model.active = True
+            model.K = self.K
 
         generate_zero = self.generate_zero_t % (min_distance_Be, min_distance_WBe, min_distance_W)
         calculator_relax = LAMMPSlib(lmpcmds=generate_zero.split("\n"),
@@ -268,21 +268,21 @@ class EntropyMaximizer:
             #relax with the core repulsion alone
             print("Relaxing with core repulsion")
             atoms.calc = calculator_relax
-            opt = BFGSLineSearch(atoms, force_consistent=True, logfile=None)#logfile="log_relax")
+            opt = BFGSLineSearch(atoms, logfile=None)#logfile="log_relax")
             opt.run(fmax=0.05, steps=50)
 
             #relax with the entropy model overlapped with the repulsion
             print("Relaxing with entropy model")
             atoms.calc = calculator_min
-            opt = BFGSLineSearch(atoms, force_consistent=True, logfile=None)#logfile="log_entropy_model")
+            opt = BFGSLineSearch(atoms, logfile=None)#logfile="log_entropy_model")
             opt.run(fmax=0.05, steps=50)
 
             print("Compute descriptors and evaluate det")
-            d=entropy.compute_descriptors(atoms)
-            cand_cond,cand_det=self.manager.evaluate(d)
+            d = entropy.compute_descriptors(atoms)
+            cand_cond, cand_det = self.manager.evaluate(d)
 
-            if self.i_accept>1:
-                print("CANDIDATE:", cand_cond, cand_det, "CURRENT:", current_cond, self.current_det, "\n")
+            if self.i_accept > 0:
+                print("CANDIDATE:", cand_cond, cand_det, "CURRENT:", self.current_cond, self.current_det, "\n")
 
             dists_Be, dists_W, dists_WBe = get_AB_distances(atoms)
             if (np.min(dists_Be) > min_distance_Be) and (np.min(dists_W) > min_distance_W) and (np.min(dists_WBe) > min_distance_WBe):
@@ -294,35 +294,36 @@ class EntropyMaximizer:
             print("Candidate distances (W, Be, WBe): ", np.min(dists_W), np.min(dists_Be), np.min(dists_WBe))
             print("Results:i, diff: ", i, cand_det-self.current_det)
 
+            file_name = "configs/POSCAR_"+str(n_atoms)+"_"+str(self.i_accept)
             if self.i_accept<=10 and dists_cond:
-                yield atoms
+                yield "entropy/"+file_name  # yield atoms
                 self.manager.update(d)
-                current_cond,self.current_det=self.manager.evaluate()
-                print("***CANDIDATE:", cand_cond, cand_det, "CURRENT:", current_cond, self.current_det)
+                self.current_cond, self.current_det = self.manager.evaluate()
+                print("***CANDIDATE:", cand_cond, cand_det, "CURRENT:", self.current_cond, self.current_det)
                 if self.energy_mode:
-                    write("configs/POSCAR_"+str(n_atoms)+"_"+str(self.i_accept), atoms)
+                    write(file_name, atoms)
                 else:
-                    write("configs/POSCAR_"+str(n_atoms)+"_"+str(self.i_accept), atoms)
-                self.i_accept+=1
+                    write(file_name, atoms)
+                self.i_accept += 1
                 self.n_det_acc.append(self.current_det)
                 if i>1:
-                    self.n_cond_acc.append(current_cond)
+                    self.n_cond_acc.append(self.current_cond)
             else:
                 if dists_cond and ((self.strict_entropy_decrease and cand_det < self.current_det) or not self.strict_entropy_decrease):
-                    yield atoms
-                    self.n_reject_dist=0
-                    self.n_reject_improve=0
+                    yield "entropy/"+file_name  # yield atoms
+                    self.n_reject_dist = 0
+                    self.n_reject_improve = 0
                     self.manager.update(d)
-                    current_cond,self.current_det=self.manager.evaluate()
-                    print("***CANDIDATE:", cand_cond, cand_det, "CURRENT:", current_cond, self.current_det)
+                    self.current_cond, self.current_det = self.manager.evaluate()
+                    print("***CANDIDATE:", cand_cond, cand_det, "CURRENT:", self.current_cond, self.current_det)
                     if self.energy_mode:
-                        write("configs/POSCAR_"+str(n_atoms)+"_"+str(self.i_accept), atoms)
+                        write(file_name, atoms)
                     else:
-                        write("configs/POSCAR_"+str(n_atoms)+"_"+str(self.i_accept), atoms)
-                    self.i_accept+=1
-                    self.n_accept+=1
+                        write(file_name, atoms)
+                    self.i_accept += 1
+                    self.n_accept += 1
                     self.n_det_acc.append(self.current_det)
-                    self.n_cond_acc.append(current_cond)
+                    self.n_cond_acc.append(self.current_cond)
                 else:
                     if dists_cond:
                         self.n_reject_improve+=1
@@ -335,21 +336,21 @@ class EntropyMaximizer:
 
             print("K=", self.K, "n_reject_improve=", self.n_reject_improve, "n_reject_dist=", self.n_reject_dist)
 
-            if self.n_reject_improve>10:
-                self.K*=1.05
-                self.n_reject_improve=0
-                self.n_reject_dist=0
-            if self.n_reject_dist>10:
-                self.K*=0.9
-                self.n_reject_improve=0
-                self.n_reject_dist=0
-            if self.n_accept>10:
-                self.K*=1.005
-                self.n_accept=0
+            if self.n_reject_improve > 10:
+                self.K *= 1.05
+                self.n_reject_improve = 0
+                self.n_reject_dist = 0
+            if self.n_reject_dist > 10:
+                self.K *= 0.9
+                self.n_reject_improve = 0
+                self.n_reject_dist = 0
+            if self.n_accept > 10:
+                self.K *= 1.005
+                self.n_accept = 0
 
             print("K=", self.K, "n_reject_improve=", self.n_reject_improve, "n_reject_dist=", self.n_reject_dist, "\n")
 
-            if i%10==0:
+            if i%10 == 0:
                 self.manager.print_status()
                 if self.energy_mode:
                     pickle.dump(self.manager.data, open("d-opti-energy.p", "wb"))
@@ -359,11 +360,6 @@ class EntropyMaximizer:
             # TODO: Figure out this breaking condition (should be in the __main__ file)
             # if model.count>100000:
             #     break
-
-            if i%10==0 and not self.manager.s is None:
-                plt.figure()
-                plt.semilogy(self.manager.s)
-                plt.show()
 
             to_save = "i = "+str(i)+ \
                     "\nK = "+str(self.K)+ \
@@ -382,5 +378,5 @@ class EntropyMaximizer:
             pickle.dump(self.n_cond_all, open("cond_all.pckl", "wb"))
             pickle.dump(self.n_cond_acc, open("cond_acc.pckl", "wb"))
 
-        except:
-            pass
+        except Exception as e:
+            print(e)

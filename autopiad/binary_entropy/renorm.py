@@ -157,6 +157,7 @@ class RandomEntropyInitializer:
         pair_coeff 1 2 soft 10 %f
         pair_coeff 2 2 soft 10 %f
         pair_coeff * * mliap Re W
+        compute pe_peratom all pe/atom
         """
 
         self.core_radius_W  = NN_dists["W"]
@@ -183,9 +184,9 @@ class RandomEntropyInitializer:
 
         self.target_V = []
         self.target_D = []
-        i=0
+        i = 0
         while i<100:
-            i=self.create_configuration(i)
+            i = self.create_configuration(i)
 
         mean = self.manager_random.sum/self.manager_random.count
         covariance = self.manager_random.cross/self.manager_random.count-np.outer(mean,mean)
@@ -247,12 +248,12 @@ class RandomEntropyInitializer:
             #relax with the core repulsion alone
             print("Relaxing with core repulsion")
             atoms.calc = calculator_relax
-            opt = BFGSLineSearch(atoms, force_consistent=True, logfile="log_relax")
+            opt = BFGSLineSearch(atoms, logfile="log_relax")
             opt.run(fmax=0.05, steps=50)
             
             #No optimizing with the entropy model
             atoms.calc = calculator_min
-            d=entropy.compute_descriptors(atoms)
+            d = entropy.compute_descriptors(atoms)
                     
             dists_Be, dists_W, dists_WBe = get_AB_distances(atoms)
             print(np.min(dists_W), np.min(dists_Be), np.min(dists_WBe))
@@ -267,10 +268,10 @@ class RandomEntropyInitializer:
                 print(np.min(dists_W), np.min(dists_Be), np.min(dists_WBe))
                 self.target_D.append([np.min(dists_W), np.min(dists_Be), np.min(dists_WBe)])
                 self.manager_random.update(d)
-                ase.io.lammpsdata.write_lammps_data("renorm_configs/renorm_config_"+str(i)+".dat", atoms)
-                i+=1
-        except:
-            pass
+                ase.io.lammpsdata.write_lammps_data("renorm_configs/renorm_config_" + str(i) + ".dat", atoms)
+                i += 1
+        except Exception as e:
+            print(e)
         
         print("\n")
 

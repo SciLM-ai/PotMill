@@ -21,96 +21,96 @@ def compute_descriptors(atoms):
 
 class EntropyCalculator(ase.calculators.lammpslib.LAMMPSlib):
 
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args,**kwargs)
-            self.entropy_model=kwargs['model']
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args,**kwargs)
+        self.entropy_model=kwargs['model']
 
-        def initialise_lammps(self, atoms):
-            #print("initialise_lammps",flush=True)
-            import lammps
-            import lammps.mliap
-            import numpy as np
-            from ase.data import (atomic_numbers as ase_atomic_numbers,
-                      chemical_symbols as ase_chemical_symbols,
-                      atomic_masses as ase_atomic_masses)
-            from ase.calculators.lammps import convert
+    def initialise_lammps(self, atoms):
+        #print("initialise_lammps",flush=True)
+        import lammps
+        import lammps.mliap
+        import numpy as np
+        from ase.data import (atomic_numbers as ase_atomic_numbers,
+                    chemical_symbols as ase_chemical_symbols,
+                    atomic_masses as ase_atomic_masses)
+        from ase.calculators.lammps import convert
 
-            # Initialising commands
-            if self.parameters.boundary:
-                # if the boundary command is in the supplied commands use that
-                # otherwise use atoms pbc
-                for cmd in self.parameters.lmpcmds:
-                    if 'boundary' in cmd:
-                        break
-                else:
-                    self.lmp.command('boundary ' + self.lammpsbc(atoms))
-
-            # Initialize cell
-            self.set_cell(atoms, change=not self.parameters.create_box)
-
-            if self.parameters.atom_types is None:
-                # if None is given, create from atoms object in order of appearance
-                s = atoms.get_chemical_symbols()
-                _, idx = np.unique(s, return_index=True)
-                s_red = np.array(s)[np.sort(idx)].tolist()
-                self.parameters.atom_types = {j: i + 1 for i, j in enumerate(s_red)}
-
-            # Initialize box
-            if self.parameters.create_box:
-                # count number of known types
-                n_types = len(self.parameters.atom_types)
-                create_box_command = 'create_box {} cell'.format(n_types)
-                self.lmp.command(create_box_command)
-
-            # Initialize the atoms with their types
-            # positions do not matter here
-            if self.parameters.create_atoms:
-                self.lmp.command('echo none')  # don't echo the atom positions
-                self.rebuild(atoms)
-                self.lmp.command('echo log')  # turn back on
-            else:
-                self.previous_atoms_numbers = atoms.numbers.copy()
-
-            lammps.mliap.activate_mliappy(self.lmp)
-            # execute the user commands
+        # Initialising commands
+        if self.parameters.boundary:
+            # if the boundary command is in the supplied commands use that
+            # otherwise use atoms pbc
             for cmd in self.parameters.lmpcmds:
-                #print("self.parameters.lmpcmds: ",cmd)
-                self.lmp.command(cmd)
-            lammps.mliap.load_model(self.entropy_model)
-            # Set masses after user commands, e.g. to override
-            # EAM-provided masses
-            for sym in self.parameters.atom_types:
-                if self.parameters.atom_type_masses is None:
-                    mass = ase_atomic_masses[ase_atomic_numbers[sym]]
-                else:
-                    mass = self.parameters.atom_type_masses[sym]
-                self.lmp.command('mass %d %.30f' % (
-                    self.parameters.atom_types[sym],
-                    convert(mass, "mass", "ASE", self.units)))
+                if 'boundary' in cmd:
+                    break
+            else:
+                self.lmp.command('boundary ' + self.lammpsbc(atoms))
 
-            # Define force & energy variables for extraction
-            self.lmp.command('variable pxx equal pxx')
-            self.lmp.command('variable pyy equal pyy')
-            self.lmp.command('variable pzz equal pzz')
-            self.lmp.command('variable pxy equal pxy')
-            self.lmp.command('variable pxz equal pxz')
-            self.lmp.command('variable pyz equal pyz')
+        # Initialize cell
+        self.set_cell(atoms, change=not self.parameters.create_box)
 
-            # I am not sure why we need this next line but LAMMPS will
-            # raise an error if it is not there. Perhaps it is needed to
-            # ensure the cell stresses are calculated
-            self.lmp.command('thermo_style custom pe pxx emol ecoul')
+        if self.parameters.atom_types is None:
+            # if None is given, create from atoms object in order of appearance
+            s = atoms.get_chemical_symbols()
+            _, idx = np.unique(s, return_index=True)
+            s_red = np.array(s)[np.sort(idx)].tolist()
+            self.parameters.atom_types = {j: i + 1 for i, j in enumerate(s_red)}
 
-            self.lmp.command('variable fx atom fx')
-            self.lmp.command('variable fy atom fy')
-            self.lmp.command('variable fz atom fz')
+        # Initialize box
+        if self.parameters.create_box:
+            # count number of known types
+            n_types = len(self.parameters.atom_types)
+            create_box_command = 'create_box {} cell'.format(n_types)
+            self.lmp.command(create_box_command)
 
-            # do we need this if we extract from a global ?
-            self.lmp.command('variable pe equal pe')
+        # Initialize the atoms with their types
+        # positions do not matter here
+        if self.parameters.create_atoms:
+            self.lmp.command('echo none')  # don't echo the atom positions
+            self.rebuild(atoms)
+            self.lmp.command('echo log')  # turn back on
+        else:
+            self.previous_atoms_numbers = atoms.numbers.copy()
 
-            self.lmp.command("neigh_modify delay 0 every 1 check yes")
+        lammps.mliap.activate_mliappy(self.lmp)
+        # execute the user commands
+        for cmd in self.parameters.lmpcmds:
+            #print("self.parameters.lmpcmds: ",cmd)
+            self.lmp.command(cmd)
+        lammps.mliap.load_model(self.entropy_model)
+        # Set masses after user commands, e.g. to override
+        # EAM-provided masses
+        for sym in self.parameters.atom_types:
+            if self.parameters.atom_type_masses is None:
+                mass = ase_atomic_masses[ase_atomic_numbers[sym]]
+            else:
+                mass = self.parameters.atom_type_masses[sym]
+            self.lmp.command('mass %d %.30f' % (
+                self.parameters.atom_types[sym],
+                convert(mass, "mass", "ASE", self.units)))
 
-            self.initialized = True
+        # Define force & energy variables for extraction
+        self.lmp.command('variable pxx equal pxx')
+        self.lmp.command('variable pyy equal pyy')
+        self.lmp.command('variable pzz equal pzz')
+        self.lmp.command('variable pxy equal pxy')
+        self.lmp.command('variable pxz equal pxz')
+        self.lmp.command('variable pyz equal pyz')
+
+        # I am not sure why we need this next line but LAMMPS will
+        # raise an error if it is not there. Perhaps it is needed to
+        # ensure the cell stresses are calculated
+        self.lmp.command('thermo_style custom pe pxx emol ecoul')
+
+        self.lmp.command('variable fx atom fx')
+        self.lmp.command('variable fy atom fy')
+        self.lmp.command('variable fz atom fz')
+
+        # do we need this if we extract from a global ?
+        self.lmp.command('variable pe equal pe')
+
+        self.lmp.command("neigh_modify delay 0 every 1 check yes")
+
+        self.initialized = True
 
 
 #generate a random cell with a given volume per atom and number of atoms

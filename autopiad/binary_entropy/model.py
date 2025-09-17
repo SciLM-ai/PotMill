@@ -1,6 +1,6 @@
 import numpy as np
 import jax.numpy as jaxnp
-from jax import grad, jit
+from jax import grad, jit, clear_caches
 from functools import partial
 
 
@@ -81,19 +81,18 @@ class CNModel:
             if not jaxnp.all(jaxnp.isfinite(b)):
                 print("GRAD ERROR!")
                 #print(b)
-
           
         else:
             energy[:] = 0
             beta[:, :] = 0        
  
-            
         #cleanup the jax cache. Seems to be required, otherwise can grow without bound and crash the code
+        # clear_caches()
         if self.cn._cache_size() > 30:
             self.cn._clear_cache()
             import gc
             import sys
-            for module_name, module in sys.modules.items():
+            for module_name, module in list(sys.modules.items()):
                 if module_name.startswith("jax"):
                     if module_name not in ["jax.interpreters.partial_eval"]:
                         for obj_name in dir(module):
@@ -130,29 +129,29 @@ class CNManager:
             
     def print_status(self):
         self.evaluate()
-        print("STATUS  -- COUNT ",self.count, " COND: ", np.linalg.cond(self.projected_information), "DET: ", -np.log( np.linalg.det(self.projected_information)) , flush=True)
+        # print("STATUS  -- COUNT ",self.count, " COND: ", np.linalg.cond(self.projected_information), "DET: ", -np.log( np.linalg.det(self.projected_information)) , flush=True)
 
 
     def update(self, dd, key=None):    
         self.data.append(dd)
-        dt=dd-self.mean
+        dt = dd - self.mean
         
         if self.energy_mode:
-            dt=np.mean(dt,axis=0)
-            dt=dt.reshape((1,-1))
+            dt = np.mean(dt,axis=0)
+            dt = dt.reshape((1,-1))
         
-        self.sum+=np.sum(dt,axis=0)
-        self.cross+=dt.T@dt
-        self.count+=dt.shape[0]
+        self.sum += np.sum(dt,axis=0)
+        self.cross += dt.T@dt
+        self.count += dt.shape[0]
                
         #this is the covariance matrix of the descriptors
-        information= self.cross/self.count 
-        projected_information=np.divide(information,self.renorm)
+        information = self.cross/self.count 
+        projected_information = np.divide(information,self.renorm)
         projected_information += self.reg
         
         try:
-            u,s,vh=np.linalg.svd(projected_information)
-            self.s=s
+            u,s,vh = np.linalg.svd(projected_information)
+            self.s = s
         except:
             pass
     
