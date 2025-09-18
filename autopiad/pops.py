@@ -1,6 +1,6 @@
 
 def pops(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparameters,
-        mlip, train_fraction = 0.7, n_fold = 3):
+        mlip, batch_ID=None, train_fraction = 0.7, n_fold = 3):
 
     import numpy as np
     import pandas as pd
@@ -28,9 +28,16 @@ def pops(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamet
     print(len(feature_indices), len(feature_names))
     b_size = len(vasp_IDs_ready_for_fit)
     b_vect = pd.read_csv(f"{features_directory}b{b_size}.csv", index_col=0, header=None).sort_index()
-    b_vect_index = b_vect.index.to_numpy()
-    a_matr_map = np.load(features_directory + rcuts_to_string(rcuts,delimiter="_") + "/a.npy", mmap_mode='r')
-    a_matr = a_matr_map[b_vect_index[:, None],feature_indices]
+    a_matr = []
+    if batch_ID is None:
+        b_vect_index = b_vect.index.to_numpy()
+        a_matr_map = np.load(f"{features_directory}{rcuts_to_string(rcuts,delimiter='_')}/a.npy", mmap_mode='r')
+        a_matr = a_matr_map[b_vect_index[:, None],feature_indices]
+    else:
+        for id in range(batch_ID+1):
+            a_matr_map = np.load(f"{features_directory}{id}/{rcuts_to_string(rcuts,delimiter='_')}/a.npy", mmap_mode='r')
+            a_matr.append(a_matr_map[:,feature_indices])
+        a_matr = np.concatenate(a_matr)
     b_vect.reset_index(inplace=True)
     b_vect_no_dupl = b_vect.drop_duplicates(subset=1)
     job_ids = b_vect_no_dupl[1].to_list()

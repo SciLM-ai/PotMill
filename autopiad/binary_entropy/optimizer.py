@@ -127,7 +127,7 @@ class EntropyMaximizer:
         # n_keep = self.n_descriptors_tot #work on n_keep descriptors at the time
 
         self.epsilon = 1e-4
-        self.K = 3.
+        self.K = 1.
 
         self.current_det = 0
         self.i_reject_dist = 0
@@ -296,7 +296,6 @@ class EntropyMaximizer:
 
             file_name = "configs/POSCAR_"+str(n_atoms)+"_"+str(self.i_accept)
             if self.i_accept<=10 and dists_cond:
-                yield "entropy/"+file_name  # yield atoms
                 self.manager.update(d)
                 self.current_cond, self.current_det = self.manager.evaluate()
                 print("***CANDIDATE:", cand_cond, cand_det, "CURRENT:", self.current_cond, self.current_det)
@@ -304,13 +303,14 @@ class EntropyMaximizer:
                     write(file_name, atoms)
                 else:
                     write(file_name, atoms)
+                atoms.calc = None
+                yield atoms  # yield "entropy/"+file_name
                 self.i_accept += 1
                 self.n_det_acc.append(self.current_det)
                 if i>1:
                     self.n_cond_acc.append(self.current_cond)
             else:
                 if dists_cond and ((self.strict_entropy_decrease and cand_det < self.current_det) or not self.strict_entropy_decrease):
-                    yield "entropy/"+file_name  # yield atoms
                     self.n_reject_dist = 0
                     self.n_reject_improve = 0
                     self.manager.update(d)
@@ -320,6 +320,8 @@ class EntropyMaximizer:
                         write(file_name, atoms)
                     else:
                         write(file_name, atoms)
+                    atoms.calc = None
+                    yield atoms  # yield "entropy/"+file_name 
                     self.i_accept += 1
                     self.n_accept += 1
                     self.n_det_acc.append(self.current_det)

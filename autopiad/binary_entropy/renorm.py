@@ -185,7 +185,7 @@ class RandomEntropyInitializer:
         self.target_V = []
         self.target_D = []
         i = 0
-        while i<100:
+        while i<10:  #TODO: Change this back to 10
             i = self.create_configuration(i)
 
         mean = self.manager_random.sum/self.manager_random.count

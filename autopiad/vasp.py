@@ -141,7 +141,7 @@ def vasp(start_path, input_file, job_id, first_index):
     if isinstance(input_file, Atoms):
         atoms = input_file
     else:
-        atoms = read(input_file, index=0, format='vasp')
+        atoms = read(start_path+input_file, index=0, format='vasp')
     atoms.pbc = True
     atoms.calc = calc
 
@@ -202,4 +202,4 @@ def vasp(start_path, input_file, job_id, first_index):
     except:
         print("Error while running VASP or writing the output files")
 
-    return {"job_id":job_id, "atoms":atoms}
+    return {"job_ID":job_id, "atoms":atoms}
