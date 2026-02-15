@@ -12,7 +12,9 @@
 
 export MPICH_GPU_SUPPORT_ENABLED=0
 
-rm -rf /lustre/scratch4/baghishov/tmp/*
+# rm -rf /lustre/scratch5/baghishov/tmp/*
 
-srun flux start -o,-Sstatedir=/lustre/scratch4/baghishov/tmp python -u -m autopiad
+srun flux start python -u -m autopiad
+#srun flux start -o,-Sstatedir=/lustre/scratch5/baghishov/tmp/ python -u -m autopiad
+#srun bash -c 'mkdir -p /tmp/flux-job-${SLURM_JOB_ID} && flux start -o,-Sstatedir=/tmp/flux-job-${SLURM_JOB_ID} python -u -m autopiad'
 # python -u featurize.py /lustre/scratch5/baghishov/auto_multi_test/

@@ -202,4 +202,5 @@ def vasp(start_path, input_file, job_id, first_index):
     except:
         print("Error while running VASP or writing the output files")
 
+    atoms.calc = None
     return {"job_ID":job_id, "atoms":atoms}

@@ -6,10 +6,10 @@ vasp = 1
 fit = 1
 pareto = 1
 pops = 1
-fit_freq = 100
+fit_freq = 10
 auto_reduce_hyperparameters = 0
 ncores_per_fit = 5
-nconfigurations_for_cost = 100
+nconfigurations_for_cost = 10
 
 [FitSNAP]
 mlip = ACE

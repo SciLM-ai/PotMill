@@ -7,7 +7,7 @@ def featurize(atoms_traj, config, fitsnap_config, rcuts, only_cost=False, hyperp
     from fitsnap3lib.fitsnap import FitSnap
     from fitsnap3lib.scrapers.ase_funcs import ase_scraper
     from autopiad.tools import rcuts_to_string
-    
+
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -42,7 +42,7 @@ def featurize(atoms_traj, config, fitsnap_config, rcuts, only_cost=False, hyperp
         os.system("rm -rf coupling_coefficients.yace *.pickle")
         if not only_cost:
             np.save("a.npy", fs.pt.shared_arrays["a"].array)
-        
+
             bnames = []
             if config['FitSNAP']['mlip'] == "ACE":
                 numtypes = fs.config.sections["ACE"].numtypes

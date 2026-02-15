@@ -1,6 +1,9 @@
 #!/bin/bash
 source /users/baghishov/.bashrc
 
+export VASP_ROOT=/usr/projects/icapt/applications/vasp/vasp-6.4.2-nvidia-gpu
+source ${VASP_ROOT}/setenv_chicoma.sh
+
 ############### This is important for other programs ##########################
 echo $FLUX_PMI_LIBRARY_PATH
 # The FLUX_PMI_LIBRARY_PATH variable is always created under a flux instance (flux start).
@@ -13,8 +16,6 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/nvidia/hpc_sdk/Linux_x86_64/24.7/cu
 export TMP_LD_LIBRARY_PATH=$CONDA_LD:$PMIPATH:$LD_LIBRARY_PATH
 ###############################################################################
 
-export VASP_ROOT=/usr/projects/icapt/applications/vasp/vasp-6.4.2-nvidia-gpu
-source ${VASP_ROOT}/setenv_chicoma.sh
 export MPICH_GPU_SUPPORT_ENABLED=0
 
 # pwd
