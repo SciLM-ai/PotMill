@@ -115,9 +115,9 @@ class EntropyCalculator(ase.calculators.lammpslib.LAMMPSlib):
 
 #generate a random cell with a given volume per atom and number of atoms
 def generate_random_cell(atom_numbers, target_volume, shape=[1,1,1], ratio_of_covalent_radii=0.5):
-    from ase.ga.utilities import closest_distances_generator
-    from ase.ga.utilities import get_all_atom_types
-    from ase.ga.startgenerator import StartGenerator
+    from ase_ga.utilities import closest_distances_generator
+    from ase_ga.utilities import get_all_atom_types
+    from ase_ga.startgenerator import StartGenerator
     from ase.data import atomic_numbers
     n_atoms=len(atom_numbers)
     #generate a random box

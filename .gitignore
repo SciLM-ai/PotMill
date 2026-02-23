@@ -27,7 +27,9 @@ examples/**
 !examples/WRe/ACE/inputfile
 !examples/WRe/ACE/FitSNAP.in
 !examples/WRe/ACE/run_debug.sh
+!examples/WRe/ACE/run_perlmutter.sh
 !examples/WRe/ACE/run_vasp_6.3.2_std_ase.sh
+!examples/WRe/ACE/CLAUDE.md
 !examples/WRe/SNAP/inputfile
 !examples/WRe/SNAP/FitSNAP.in
 !examples/WRe/SNAP/run_debug.sh

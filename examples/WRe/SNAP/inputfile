@@ -1,10 +1,10 @@
-[MODE]
+[MAIN]
 resume = 0
 vasp = 1
 featurize = 1
 fit = 1
 pareto = 1
-fit_freq = 100
+nconfigurations_per_fit = 100
 auto_reduce_hyperparameters = 0
 ncores_per_fit = 5
 

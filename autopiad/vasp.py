@@ -112,8 +112,9 @@ def convert_xml_to_jason(xml_file, JSON_file):
             config_number += 1 
 
 
-def vasp(start_path, input_file, job_id, first_index):
-    print(start_path, input_file, job_id, first_index)
+def vasp(start_path, input_file, job_id, first_index, dirpath):
+
+    os.chdir(dirpath)
 
     os.environ['VASP_PP_PATH'] = "/users/baghishov/pyiron/resources/vasp/potentials/"
     os.environ['VASP_COMMAND'] = start_path+"run_vasp_6.3.2_std_ase.sh > vasp_output.log 2>&1"
@@ -159,7 +160,7 @@ def vasp(start_path, input_file, job_id, first_index):
         np.savetxt("b", b, delimiter=',', fmt=['%i','%i','%.10f'])
 
         #write the output in ASE traj format
-        write("atoms_%i.traj" % job_id,images=atoms,format='traj')
+        write(f"atoms_{job_id}.traj", images=atoms, format='traj')
 
         #look into using Custodian here to do error detection/validation
 

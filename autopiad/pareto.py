@@ -31,7 +31,7 @@ def pareto(start_path, vasp_batch_idx, hyperparameters_list, hyperparameters_lis
             rcuts, twojmaxes = hyperparameters_list_noeweight[i]
             values_list = rcuts + twojmaxes
             costs_directory += snap_hyperparameters_to_string(hyperparameters_list_noeweight[i], delimiter='_', w_eweight=False)
-        with open(costs_directory+"/flux.out", "r") as f:
+        with open(costs_directory+"/flux_0.out", "r") as f:
             lines = f.readlines()
             for line in lines:
                 if "process_configs" in line:

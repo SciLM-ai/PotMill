@@ -1,12 +1,13 @@
-[MODE]
+[MAIN]
 resume = 0
 entropy = 1
 featurize = 1
-vasp = 1
+labeling = 1
 fit = 1
 pareto = 1
 pops = 1
-fit_freq = 10
+nconfigurations = 40
+nconfigurations_per_fit = 20
 auto_reduce_hyperparameters = 0
 ncores_per_fit = 5
 nconfigurations_for_cost = 10
@@ -17,12 +18,12 @@ chem_elem = W Re
 filename = FitSNAP.in
 
 [RCUT]
-min_rcut = 4
+min_rcut = 5
 max_rcut = 6
-num_rcut = 5
+num_rcut = 3
 
 [NMAX]
-min_nmax = 6 3
+min_nmax = 8 3
 max_nmax = 10 4
 
 [LMAX]
@@ -33,3 +34,8 @@ max_lmax = 0 2
 middle_eweight = 10
 num_eweights = 3
 constant = 1
+
+[STRUCTUREGEN]
+method = binary
+elements = W Re
+twojmax = 4

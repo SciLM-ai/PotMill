@@ -1,4 +1,4 @@
-[MODE]
+[MAIN]
 resume = 0
 entropy = 0
 featurize = 1
@@ -6,7 +6,7 @@ vasp = 1
 fit = 1
 pareto = 1
 pops = 1
-fit_freq = 100
+nconfigurations_per_fit = 100
 auto_reduce_hyperparameters = 0
 ncores_per_fit = 5
 nconfigurations_for_cost = 100

@@ -59,16 +59,16 @@ def main():
     fitsnap_config = {section: dict(fitsnap_config.items(section)) for section in fitsnap_config.sections()}
 
     mlip = config["FitSNAP"]["mlip"]
-    resume_mode = config["MODE"]["resume"]
-    entropy_mode = config["MODE"]["entropy"]
-    feature_mode = config["MODE"]["featurize"]
-    vasp_mode = config["MODE"]["vasp"]
-    fit_mode = config["MODE"]["fit"]
-    pareto_mode = config["MODE"]["pareto"]
-    pops_mode = config["MODE"]["pops"]
-    fit_freq = config["MODE"]["fit_freq"]
-    ncores_per_fit = config["MODE"]["ncores_per_fit"]
-    auto_reduce_hps = config["MODE"]["auto_reduce_hyperparameters"]
+    resume_mode = config["MAIN"]["resume"]
+    entropy_mode = config["MAIN"]["entropy"]
+    feature_mode = config["MAIN"]["featurize"]
+    vasp_mode = config["MAIN"]["vasp"]
+    fit_mode = config["MAIN"]["fit"]
+    pareto_mode = config["MAIN"]["pareto"]
+    pops_mode = config["MAIN"]["pops"]
+    nconfigurations_per_fit = config["MAIN"]["nconfigurations_per_fit"]
+    ncores_per_fit = config["MAIN"]["ncores_per_fit"]
+    auto_reduce_hps = config["MAIN"]["auto_reduce_hyperparameters"]
     rcuts_list = create_rcut_range(config["RCUT"]["min_rcut"],config["RCUT"]["max_rcut"],config["RCUT"]["num_rcut"])
     if mlip == "ACE":
         hyperparameters_list = combined_ace_hyperparameters(config)
@@ -173,7 +173,7 @@ def main():
                     fs.task_ = i
                     vasp_futures.append(fs)
 
-                batched_vasp_futures = exe.batched(vasp_futures, n=fit_freq)
+                batched_vasp_futures = exe.batched(vasp_futures, n=nconfigurations_per_fit)
                 for i, batched_vasp_future in enumerate(batched_vasp_futures):
                     fs = exe.submit(combine_b, start_path, batched_vasp_future, b_futures[-1],
                                     resource_dict={"cores": 1, "cwd": start_path+"vasp-energy",
@@ -215,7 +215,7 @@ def main():
 
             if pareto_mode:
                 print("COST jobs submission...")
-                nconfigs4cost = config["MODE"]["nconfigurations_for_cost"]
+                nconfigs4cost = config["MAIN"]["nconfigurations_for_cost"]
                 for i in costs:  # Loop over hyperparameters_list_noeweight
                     hyperparams = hyperparameters_list_noeweight[i]
                     rcuts = hyperparams[0]
