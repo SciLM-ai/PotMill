@@ -148,145 +148,145 @@ def main():
     if pareto_mode: pareto_futures = []
     if pops_mode: pops_futures = []
 
+    with flux.job.FluxExecutor() as flux_executor:
+        with FluxJobExecutor(flux_log_files=True, max_workers=all_ngpus, block_allocation=True, flux_executor=flux_executor
+                             resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1,
+                                            "cwd": start_path+"labeling", "error_log_file": "error.out"}) as labeling_exe:  # add flux_executor_nesting=True,   also maybe or not this one: cache_directory=start_path+'labeling_cache'
 
-    with FluxJobExecutor(flux_log_files=True, max_workers=all_ngpus, block_allocation=True,
-                         resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1,
-                                        "cwd": start_path+"labeling", "error_log_file": "error.out"}) as labeling_exe:  # add flux_executor_nesting=True,   also maybe or not this one: cache_directory=start_path+'labeling_cache'
+            with FluxJobExecutor(flux_log_files=True, flux_executor=flux_executor) as exe:  # cache_directory=start_path+'main_cache'
 
-        with FluxJobExecutor(flux_log_files=True) as exe:  # cache_directory=start_path+'main_cache'
-            
-            with FluxJobExecutor(flux_log_files=True, max_workers=1,  # cache_directory=start_path+'entropy_cache',
-                                 init_function=make_init_atoms_from_entropy(structuregen_config), block_allocation=True,
-                                 resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                                                "cwd": start_path+"entropy", "error_log_file":"error.out"}) as entropy_exe:
-
-                if entropy_mode:
-                    print("Entropy jobs submission...")
-                    for i in range(nconfigurations):
-                        fs = entropy_exe.submit(next_atoms_from_entropy)
-                        fs.task_ = i
-                        entropy_atoms_futures.append(fs)
-
-                if labeling_mode:
-                    print("LABELING jobs submission...")
-                    for i, entropy_atoms in enumerate(entropy_atoms_futures):  # Loop over atomic configuration indices
-                        labeling_directory = f"{start_path}labeling/{i}/"
-                        os.makedirs(labeling_directory, exist_ok=True)
-                        # fs = labeling_exe.submit(vasp, start_path, entropy_atoms, i, 0, labeling_directory,
-                        #                      resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                        #                                     "cwd": labeling_directory, "error_log_file": "error.out"})
-                        fs = labeling_exe.submit(uma, start_path, entropy_atoms, i, 0, labeling_directory)
-                        fs.task_ = i
-                        labeling_futures.append(fs)
-
-                    batched_labeling_futures = exe.batched(labeling_futures, n=nconfigurations_per_fit)
-                    for i, batched_labeling_future in enumerate(batched_labeling_futures):
-                        fs = exe.submit(combine_b, start_path, batched_labeling_future, b_futures[-1],
-                                        resource_dict={"cores": 1, "cwd": start_path+"labeling",
-                                                       "error_log_file": "error.out"})
-                        fs.task_ = i
-                        b_futures.append(fs)
-
-                if feature_mode:
-                    # ncores_per_featurization = int((all_ncores - all_ngpus)/len(rs.nodelist)) - 3
-                    ncores_per_featurization = 10
-                    print("FEATURIZATION jobs submission...")
-                    print(f"Number of cores allocated for featurization step is {ncores_per_featurization}")
-                    for i, batched_labeling_future in enumerate(batched_labeling_futures):
-                        # entropy_atoms = [entropy_atoms_futures[labeling_future.task_] for labeling_future in batched_labeling_future]
-                        featurization_futures_temp = []
-                        for j in featurizations:  # Loop over rcuts_list indices
-                            rcuts = rcuts_list[j]
-                            feature_directory = f"{start_path}features/{i}/{rcuts_to_string(rcuts, delimiter='_')}"
-                            os.makedirs(feature_directory, exist_ok=True)
-                            fs = exe.submit(featurize, batched_labeling_future, config, fitsnap_config, rcuts,
-                                            resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0,
-                                                           "num_nodes": 1, "cwd": feature_directory, "error_log_file":"error.out"})
-                            fs.task_ = (i,j)
-                            featurization_futures_temp.append(fs)
-                        featurization_futures.append(featurization_futures_temp)
-
-                if fit_mode:
-                    print("FITTING jobs submission...")
-                    for i, b_future in enumerate(b_futures[1:]):  # Loop over cumulative batches of finished labeling jobs
-                        fitting_futures_temp = []
-                        for j in fits:  # Loop over hyperparameters_list
-                            rcut_idx = rcuts_list.index(hyperparameters_list[j][0])
-                            fit_directory = f"{start_path}fits/{i}/"
-                            fit_directory += hyperparameters_to_string(mlip, hyperparameters_list[j], delimiter='_')
-                            os.makedirs(fit_directory, exist_ok=True)
-                            fs = exe.submit(fit, f"{start_path}features/", featurization_futures[i][rcut_idx], b_future, 
-                                            hyperparameters_list[j], mlip, batch_ID=i,
-                                            resource_dict={"cores": 1, "threads_per_core": ncores_per_fit, 
-                                                           "gpus_per_core": 0, "num_nodes": 1, "cwd": fit_directory,
-                                                           "error_log_file": "error.out"})
-                            fs.task_ = (i,j)
-                            fitting_futures_temp.append(fs)
-                        fitting_futures.append(fitting_futures_temp)  # This is a list of per batch futures lists
-
-                if pareto_mode:
-                    print("COST jobs submission...")
-                    nconfigs4cost = config["MAIN"]["nconfigurations_for_cost"]
-                    atoms4cost = exe.batched(entropy_atoms_futures, n=nconfigs4cost)[0]
-                    for i in costs:  # Loop over hyperparameters_list_noeweight
-                        hyperparams = hyperparameters_list_noeweight[i]
-                        rcuts = hyperparams[0]
-                        costs_directory = start_path + "costs/"
-                        costs_directory += hyperparameters_to_string(mlip, hyperparams, delimiter='_', w_eweight=False)
-                        os.makedirs(costs_directory, exist_ok=True)
-                        fs = exe.submit(featurize, atoms4cost, config, fitsnap_config, rcuts, True, hyperparams,
-                                        resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1, 
-                                                    "cwd": costs_directory, "error_log_file":"error.out"})
-                        fs.task_ = i
-                        cost_futures.append(fs)
-                    
-                    print("PARETO jobs submission...")
-                    for i, fitting_futures_per_b in enumerate(fitting_futures):  # Loop over batches of fitting jobs
-                        fs = exe.submit(pareto, start_path, i, fitting_futures_per_b, cost_futures, mlip,
-                                        resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                                                    "cwd":start_path+"pareto-front", "error_log_file":"error.out"})
-                        fs.task_ = i
-                        pareto_futures.append(fs)
-
-                if pops_mode:
-                    print("UNCERTAINTY QUANTIFICATION jobs submission...")
-                    for i in fits:  # Loop over hyperparameters_list
-                        rcut_idx = rcuts_list.index(hyperparameters_list[i][0])
-                        pops_directory = f"{start_path}pops/"
-                        pops_directory += hyperparameters_to_string(mlip, hyperparameters_list[i], delimiter='_')
-                        os.makedirs(pops_directory, exist_ok=True)
-                        fs = exe.submit(pops, start_path+"features/", featurization_futures[-1][rcut_idx], b_futures[-1], 
-                                        hyperparameters_list[i], mlip, batch_ID=len(b_futures)-2,
-                                        resource_dict={"cores": 1, "threads_per_core": ncores_per_fit, 
-                                                    "gpus_per_core": 0, "num_nodes": 1, "cwd": pops_directory,
-                                                    "error_log_file":"error.out"})
-                        fs.task_ = i
-                        pops_futures.append(fs)
-
-                b_futures = b_futures[1:]
-                num_b_futures = len(b_futures)
-                while len(pareto_futures):
+                with FluxJobExecutor(flux_log_files=True, max_workers=1,  # cache_directory=start_path+'entropy_cache',
+                                     init_function=make_init_atoms_from_entropy(structuregen_config), block_allocation=True, flux_executor=flux_executor
+                                     resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
+                                                    "cwd": start_path+"entropy", "error_log_file":"error.out"}) as entropy_exe:
 
                     if entropy_mode:
-                        entropy_atoms_futures = check_and_print_status(entropy_atoms_futures,
-                                                                       "ENTROPY", nconfigurations)
+                        print("Entropy jobs submission...")
+                        for i in range(nconfigurations):
+                            fs = entropy_exe.submit(next_atoms_from_entropy)
+                            fs.task_ = i
+                            entropy_atoms_futures.append(fs)
 
-                    if feature_mode: 
-                        featurization_futures = check_and_print_status(featurization_futures, "FEATURIZATION",
-                                                                       len(featurizations), list_of_lists=True)
+                    if labeling_mode:
+                        print("LABELING jobs submission...")
+                        for i, entropy_atoms in enumerate(entropy_atoms_futures):  # Loop over atomic configuration indices
+                            labeling_directory = f"{start_path}labeling/{i}/"
+                            os.makedirs(labeling_directory, exist_ok=True)
+                            # fs = labeling_exe.submit(vasp, start_path, entropy_atoms, i, 0, labeling_directory,
+                            #                      resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
+                            #                                     "cwd": labeling_directory, "error_log_file": "error.out"})
+                            fs = labeling_exe.submit(uma, start_path, entropy_atoms, i, 0, labeling_directory)
+                            fs.task_ = i
+                            labeling_futures.append(fs)
 
-                    if labeling_mode: labeling_futures = check_and_print_status(labeling_futures, "LABELING", nconfigurations)
+                        batched_labeling_futures = exe.batched(labeling_futures, n=nconfigurations_per_fit)
+                        for i, batched_labeling_future in enumerate(batched_labeling_futures):
+                            fs = exe.submit(combine_b, start_path, batched_labeling_future, b_futures[-1],
+                                            resource_dict={"cores": 1, "cwd": start_path+"labeling",
+                                                           "error_log_file": "error.out"})
+                            fs.task_ = i
+                            b_futures.append(fs)
 
-                    if labeling_mode: b_futures = check_and_print_status(b_futures, "B_COLLECTING", num_b_futures)
+                    if feature_mode:
+                        # ncores_per_featurization = int((all_ncores - all_ngpus)/len(rs.nodelist)) - 3
+                        ncores_per_featurization = 10
+                        print("FEATURIZATION jobs submission...")
+                        print(f"Number of cores allocated for featurization step is {ncores_per_featurization}")
+                        for i, batched_labeling_future in enumerate(batched_labeling_futures):
+                            # entropy_atoms = [entropy_atoms_futures[labeling_future.task_] for labeling_future in batched_labeling_future]
+                            featurization_futures_temp = []
+                            for j in featurizations:  # Loop over rcuts_list indices
+                                rcuts = rcuts_list[j]
+                                feature_directory = f"{start_path}features/{i}/{rcuts_to_string(rcuts, delimiter='_')}"
+                                os.makedirs(feature_directory, exist_ok=True)
+                                fs = exe.submit(featurize, batched_labeling_future, config, fitsnap_config, rcuts,
+                                                resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0,
+                                                               "num_nodes": 1, "cwd": feature_directory, "error_log_file":"error.out"})
+                                fs.task_ = (i,j)
+                                featurization_futures_temp.append(fs)
+                            featurization_futures.append(featurization_futures_temp)
 
-                    if fit_mode: fitting_futures = check_and_print_status(fitting_futures, "FITTING", len(fits), list_of_lists=True)
+                    if fit_mode:
+                        print("FITTING jobs submission...")
+                        for i, b_future in enumerate(b_futures[1:]):  # Loop over cumulative batches of finished labeling jobs
+                            fitting_futures_temp = []
+                            for j in fits:  # Loop over hyperparameters_list
+                                rcut_idx = rcuts_list.index(hyperparameters_list[j][0])
+                                fit_directory = f"{start_path}fits/{i}/"
+                                fit_directory += hyperparameters_to_string(mlip, hyperparameters_list[j], delimiter='_')
+                                os.makedirs(fit_directory, exist_ok=True)
+                                fs = exe.submit(fit, f"{start_path}features/", featurization_futures[i][rcut_idx], b_future, 
+                                                hyperparameters_list[j], mlip, batch_ID=i,
+                                                resource_dict={"cores": 1, "threads_per_core": ncores_per_fit, 
+                                                               "gpus_per_core": 0, "num_nodes": 1, "cwd": fit_directory,
+                                                               "error_log_file": "error.out"})
+                                fs.task_ = (i,j)
+                                fitting_futures_temp.append(fs)
+                            fitting_futures.append(fitting_futures_temp)  # This is a list of per batch futures lists
 
-                    if pareto_mode: cost_futures = check_and_print_status(cost_futures, "COST", len(costs))
+                    if pareto_mode:
+                        print("COST jobs submission...")
+                        nconfigs4cost = config["MAIN"]["nconfigurations_for_cost"]
+                        atoms4cost = exe.batched(entropy_atoms_futures, n=nconfigs4cost)[0]
+                        for i in costs:  # Loop over hyperparameters_list_noeweight
+                            hyperparams = hyperparameters_list_noeweight[i]
+                            rcuts = hyperparams[0]
+                            costs_directory = start_path + "costs/"
+                            costs_directory += hyperparameters_to_string(mlip, hyperparams, delimiter='_', w_eweight=False)
+                            os.makedirs(costs_directory, exist_ok=True)
+                            fs = exe.submit(featurize, atoms4cost, config, fitsnap_config, rcuts, True, hyperparams,
+                                            resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1, 
+                                                        "cwd": costs_directory, "error_log_file":"error.out"})
+                            fs.task_ = i
+                            cost_futures.append(fs)
 
-                    if pareto_mode: pareto_futures = check_and_print_status(pareto_futures, "PARETO", num_b_futures)
+                        print("PARETO jobs submission...")
+                        for i, fitting_futures_per_b in enumerate(fitting_futures):  # Loop over batches of fitting jobs
+                            fs = exe.submit(pareto, start_path, i, fitting_futures_per_b, cost_futures, mlip,
+                                            resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
+                                                        "cwd":start_path+"pareto-front", "error_log_file":"error.out"})
+                            fs.task_ = i
+                            pareto_futures.append(fs)
 
-                    # with open("checkpoint.pkl", "wb") as f:
-                    #     pickle.dump((labeling_futures, featurization_futures, fitting_futures, cost_futures), f)
+                    if pops_mode:
+                        print("UNCERTAINTY QUANTIFICATION jobs submission...")
+                        for i in fits:  # Loop over hyperparameters_list
+                            rcut_idx = rcuts_list.index(hyperparameters_list[i][0])
+                            pops_directory = f"{start_path}pops/"
+                            pops_directory += hyperparameters_to_string(mlip, hyperparameters_list[i], delimiter='_')
+                            os.makedirs(pops_directory, exist_ok=True)
+                            fs = exe.submit(pops, start_path+"features/", featurization_futures[-1][rcut_idx], b_futures[-1], 
+                                            hyperparameters_list[i], mlip, batch_ID=len(b_futures)-2,
+                                            resource_dict={"cores": 1, "threads_per_core": ncores_per_fit, 
+                                                        "gpus_per_core": 0, "num_nodes": 1, "cwd": pops_directory,
+                                                        "error_log_file":"error.out"})
+                            fs.task_ = i
+                            pops_futures.append(fs)
+
+                    b_futures = b_futures[1:]
+                    num_b_futures = len(b_futures)
+                    while len(pareto_futures):
+
+                        if entropy_mode:
+                            entropy_atoms_futures = check_and_print_status(entropy_atoms_futures,
+                                                                           "ENTROPY", nconfigurations)
+
+                        if feature_mode: 
+                            featurization_futures = check_and_print_status(featurization_futures, "FEATURIZATION",
+                                                                        len(featurizations), list_of_lists=True)
+
+                        if labeling_mode: labeling_futures = check_and_print_status(labeling_futures, "LABELING", nconfigurations)
+
+                        if labeling_mode: b_futures = check_and_print_status(b_futures, "B_COLLECTING", num_b_futures)
+
+                        if fit_mode: fitting_futures = check_and_print_status(fitting_futures, "FITTING", len(fits), list_of_lists=True)
+
+                        if pareto_mode: cost_futures = check_and_print_status(cost_futures, "COST", len(costs))
+
+                        if pareto_mode: pareto_futures = check_and_print_status(pareto_futures, "PARETO", num_b_futures)
+
+                        # with open("checkpoint.pkl", "wb") as f:
+                        #     pickle.dump((labeling_futures, featurization_futures, fitting_futures, cost_futures), f)
 
 
 if __name__ == "__main__":
