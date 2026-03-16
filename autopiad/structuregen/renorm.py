@@ -75,10 +75,11 @@ class RandomEntropyInitializer:
             radelems, self.chemflag, self.bzeroflag)
 
     def _init_multi_element(self, config):
-        self.n_atoms = config.get('n_atoms', config.get('n_atoms_max', 12))
         self.n_descriptors_tot = compute_n_descriptors(
-            self.twojmax, self.n_atoms, self.chemflag, self.bzeroflag)
-        self.N_atoms = [self.n_atoms]
+            self.twojmax, len(self.elements), self.chemflag, self.bzeroflag)
+        self.N_atoms = range(
+            config.get('n_atoms_min', 2),
+            config.get('n_atoms_max', 25) + 1)
         self.shapes = [[2, 1, 1], [1, 1, 1], [2, 2, 1]]
 
         width = config.get('radius_width', 0.3)
@@ -97,7 +98,7 @@ class RandomEntropyInitializer:
     def looping(self):
         """Run Phase 1: generate random configs and build renormalization matrix."""
         self.manager = CNManager(self.n_descriptors_tot)
-        n_elems = len(self.elements) if self.method == 'binary' else self.n_atoms
+        n_elems = len(self.elements)
         self.model = CNModel(
             n_elems, self.n_descriptors_tot,
             energy_mode=self.energy_mode, populations=None, mask=None,
@@ -210,13 +211,17 @@ class RandomEntropyInitializer:
             opt = BFGSLineSearch(atoms, logfile=None)
             opt.run(fmax=0.05, steps=30)
 
-            # No distance gating in Phase 1: update manager for ALL configs
-            # to capture the full range of descriptor values, matching the
-            # original d-opti-chem.py behavior.
+            # Skip cells with any dimension < 1 A to avoid neighbor list
+            # overflow in downstream LAMMPS (FitSNAP featurization).
+            if min(atoms.cell.lengths()) < 1.0:
+                return i
+
             write_mliap_descriptor_multi(
                 self.descriptor_filename, radii, self.twojmax, self.bzeroflag)
             mliap_script, zero_script = generate_lammps_scripts(
                 radii, self.descriptor_filename)
+            # n_elements must match descriptor file's nelems (= n_atoms pseudo-species)
+            self.model.n_elements = n_atoms
             calculator_min = EntropyCalculator(
                 lmpcmds=mliap_script.split("\n"), log_file=None,
                 model=self.model, keep_alive=True, atom_types=atom_types)

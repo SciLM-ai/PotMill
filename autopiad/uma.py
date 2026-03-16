@@ -3,30 +3,31 @@ import os
 from ase import Atoms
 from ase.io import read, write
 
-_calc = None
 
-def _get_calc():
-    global _calc
-    if _calc is None:
-        from fairchem.core import FAIRChemCalculator
-        _calc = FAIRChemCalculator.from_model_checkpoint("uma-m-1p1", task_name="omat", device="cuda")
-    return _calc
+def init_uma_calculator():
+    """executorlib init_function: pre-load UMA calculator once per GPU worker."""
+    from fairchem.core import FAIRChemCalculator
+    calc = FAIRChemCalculator.from_model_checkpoint("uma-m-1p1", task_name="omat", device="cuda")
+    return {"calc": calc}
 
 
-def uma(start_path, input_file, job_id, first_index, dirpath):
+def init_uma_predictor():
+    """executorlib init_function: load UMA model once per GPU worker (for batched inference)."""
+    from fairchem.core.calculate.pretrained_mlip import get_predict_unit
+    predictor = get_predict_unit("uma-m-1p1", device="cuda")
+    return {"predictor": predictor}
+
+
+def uma(start_path, input_file, job_id, first_index, dirpath, calc):
 
     os.chdir(dirpath)
-
-    # #check whether this task has been executed already. If so, skip it
-    # if os.path.isfile("b"):
-    #     sys.exit(0)
 
     if isinstance(input_file, Atoms):
         atoms = input_file
     else:
         atoms = read(start_path+input_file, index=0, format='vasp')
     atoms.pbc = True
-    atoms.calc = _get_calc()
+    atoms.calc = calc
 
     print("RUN DIRECTORY: ", os.getcwd(), " INPUT FILE: ", input_file, flush=True)
 
@@ -45,13 +46,6 @@ def uma(start_path, input_file, job_id, first_index, dirpath):
     atoms.calc = None
 
     return {"job_ID":job_id, "atoms":atoms}
-
-
-def init_uma_predictor():
-    """executorlib init_function: load UMA model once per GPU worker."""
-    from fairchem.core.calculate.pretrained_mlip import get_predict_unit
-    predictor = get_predict_unit("uma-m-1p1", device="cuda")
-    return {"predictor": predictor}
 
 
 def uma_batch(start_path, atoms_list, job_ids, labeling_dir, predictor):

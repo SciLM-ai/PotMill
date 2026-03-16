@@ -147,10 +147,11 @@ class EntropyMaximizer:
             model=self.model, keep_alive=True, atom_types=atom_types)
 
     def _init_multi_element(self, config):
-        self.n_atoms = config.get('n_atoms', config.get('n_atoms_max', 12))
         self.n_descriptors_tot = compute_n_descriptors(
-            self.twojmax, self.n_atoms, self.chemflag, self.bzeroflag)
-        self.N_atoms = [self.n_atoms]
+            self.twojmax, len(self.elements), self.chemflag, self.bzeroflag)
+        self.N_atoms = range(
+            config.get('n_atoms_min', 2),
+            config.get('n_atoms_max', 25) + 1)
         self.shapes = [[2, 1, 1], [1, 1, 1], [2, 2, 1]]
 
         width = config.get('radius_width', 0.3)
@@ -176,7 +177,7 @@ class EntropyMaximizer:
         # (new pseudo-species), so only the model is reused.
         dummy_cross = np.zeros((self.n_descriptors_tot, self.n_descriptors_tot))
         self.model = CNModel(
-            self.n_atoms, self.n_descriptors_tot,
+            len(self.elements), self.n_descriptors_tot,
             energy_mode=self.energy_mode, populations=None, mask=None,
             cross_=dummy_cross, renorm_=self.renorm,
             mean_=self.mean, count_=1, epsilon_=self.epsilon)
@@ -340,7 +341,9 @@ class EntropyMaximizer:
 
             # Early distance check: skip expensive LAMMPS entropy relaxation
             # for configs that already fail distance constraints.
-            if not _check_distances_multi(atoms, radii, species_list):
+            # Also reject cells with any dimension < 1 A to avoid neighbor
+            # list overflow in downstream LAMMPS (FitSNAP featurization).
+            if min(atoms.cell.lengths()) < 1.0 or not _check_distances_multi(atoms, radii, species_list):
                 self.n_reject_dist += 1
                 self.i_reject_dist += 1
                 self._adapt_K()
@@ -355,6 +358,9 @@ class EntropyMaximizer:
                 self.descriptor_filename, radii, self.twojmax, self.bzeroflag)
             mliap_script, zero_script = generate_lammps_scripts(
                 radii, self.descriptor_filename)
+
+            # n_elements must match descriptor file's nelems (= n_atoms pseudo-species)
+            self.model.n_elements = n_atoms
 
             # Update model state in-place (reuses existing JIT-compiled traces)
             if len(self.manager.data) < 10:

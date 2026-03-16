@@ -17,9 +17,24 @@ autopiad is an HPC pipeline that iteratively generates training data for machine
 
 The pipeline runs on HPC clusters using [Flux](https://flux-framework.org/) as the job scheduler and [executorlib](https://github.com/pyiron/executorlib) `FluxJobExecutor` for distributed task execution. Three nested executors manage resources:
 
+- `entropy_exe`: block-allocated workers with persistent state for entropy maximization
 - `labeling_exe`: block-allocated GPU workers for energy/force labeling
 - `exe`: dynamic executor for featurization, fitting, pareto, pops, and batch coordination
-- `entropy_exe`: block-allocated single worker with persistent state for entropy maximization
+
+### CRITICAL: Nested executor design with futures-based dynamic load balancing
+
+**DO NOT convert the pipeline to sequential phases.** The nested executor structure in `__main__.py` is the core architectural design and must be preserved.
+
+The pipeline works by submitting ALL tasks upfront into a single nested executor context. Tasks declare dependencies via futures (e.g., labeling futures depend on entropy futures, featurization depends on batched labeling, fitting depends on featurization + b_futures, etc.). executorlib and Flux handle scheduling: as soon as a task's dependencies resolve and resources are available, it runs immediately. This gives **dynamic load balancing** — stages overlap naturally:
+
+- Labeling starts as soon as the first entropy config is ready (not after all entropy is done)
+- Featurization starts as soon as the first labeling batch completes
+- Fitting starts as soon as featurization + b.csv are ready
+- GPUs are released early via `labeling_exe.shutdown()` once all labeling futures resolve
+
+This pipelining is essential for GPU utilization: without it, GPUs sit idle waiting for all entropy to finish, then all labeling to finish, etc. The polling loop with `check_and_print_status` monitors progress and triggers early executor shutdown to free resources.
+
+**Never replace this with sequential phases** (e.g., "Phase 1: entropy, Phase 2: labeling, ...") — that destroys the overlap and wastes resources.
 
 ## Package structure
 

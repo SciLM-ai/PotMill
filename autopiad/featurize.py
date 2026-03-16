@@ -1,21 +1,40 @@
 
-def featurize(atoms_traj, config, fitsnap_config, rcuts, only_cost=False, hyperparameters_noeweight=None):
-
+def init_featurize():
+    """executorlib init_function: pre-import all dependencies once per worker."""
     import os
     import numpy as np
     from mpi4py import MPI
     from fitsnap3lib.fitsnap import FitSnap
     from fitsnap3lib.scrapers.ase_funcs import ase_scraper
     from autopiad.tools import rcuts_to_string
-
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
+    return {"comm": comm, "rank": rank, "size": size}
+
+
+def featurize(atoms_traj, config, fitsnap_config, rcuts, feature_directory,
+              only_cost=False, hyperparameters_noeweight=None,
+              comm=None, rank=0, size=1):
+
+    if comm is None:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+    import os
+    import numpy as np
+    from fitsnap3lib.fitsnap import FitSnap
+    from fitsnap3lib.scrapers.ase_funcs import ase_scraper
+    from autopiad.tools import rcuts_to_string
+
+    os.chdir(feature_directory)
+
     if isinstance(atoms_traj, dict):
         atoms_traj = atoms_traj["atoms"]
     elif isinstance(atoms_traj, list):
         if isinstance(atoms_traj[0], dict):
-            atoms_traj = [atoms["atoms"] for atoms in atoms_traj] 
+            atoms_traj = [atoms["atoms"] for atoms in atoms_traj]
 
     configs_num = len(atoms_traj)
     ratio = configs_num//size

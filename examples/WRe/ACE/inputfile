@@ -7,10 +7,9 @@ fit = 1
 pareto = 1
 pops = 1
 nconfigurations = 40
-nconfigurations_per_fit = 20
+batch_size = 20
 auto_reduce_hyperparameters = 0
 ncores_per_fit = 5
-nconfigurations_for_cost = 10
 
 [FitSNAP]
 mlip = ACE

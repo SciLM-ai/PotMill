@@ -3,12 +3,11 @@ resume = 0
 entropy = 1
 featurize = 1
 labeling = 1
-fit = 0
-pareto = 0
-pops = 0
-nconfigurations = 1000
-nconfigurations_per_fit = 20
-nconfigurations_for_cost = 10
+fit = 1
+pareto = 1
+pops = 1
+nconfigurations = 5000
+batch_size = 200
 ncores_per_fit = 5
 auto_reduce_hyperparameters = 0
 
@@ -19,16 +18,16 @@ filename = FitSNAP.in
 
 [RCUT]
 min_rcut = 4
-max_rcut = 6
-num_rcut = 3
+max_rcut = 5
+num_rcut = 2
 
 [NMAX]
 min_nmax = 6 2
-max_nmax = 10 4
+max_nmax = 8 3
 
 [LMAX]
 min_lmax = 0 1
-max_lmax = 0 2
+max_lmax = 0 1
 
 [EWEIGHT]
 middle_eweight = 10
@@ -38,9 +37,10 @@ constant = 1
 [STRUCTUREGEN]
 method = multi_element
 elements = H Be W
-n_entropy_workers = 32
+n_entropy_workers = 64
 twojmax = 8
-n_atoms = 12
+n_atoms_min = 2
+n_atoms_max = 25
 n_renorm_configs = 100
 n_optimizer_iterations = 10000
 energy_mode = 1

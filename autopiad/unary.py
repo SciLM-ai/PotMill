@@ -66,7 +66,7 @@ def main():
     fit_mode = config["MAIN"]["fit"]
     pareto_mode = config["MAIN"]["pareto"]
     pops_mode = config["MAIN"]["pops"]
-    nconfigurations_per_fit = config["MAIN"]["nconfigurations_per_fit"]
+    batch_size = config["MAIN"]["batch_size"]
     ncores_per_fit = config["MAIN"]["ncores_per_fit"]
     auto_reduce_hps = config["MAIN"]["auto_reduce_hyperparameters"]
     rcuts_list = create_rcut_range(config["RCUT"]["min_rcut"],config["RCUT"]["max_rcut"],config["RCUT"]["num_rcut"])
@@ -175,7 +175,7 @@ def main():
                     fs.task_ = i
                     vasp_futures.append(fs)
 
-                batched_vasp_futures = exe.batched(vasp_futures, n=nconfigurations_per_fit)
+                batched_vasp_futures = exe.batched(vasp_futures, n=batch_size)
                 for i, batched_vasp_future in enumerate(batched_vasp_futures):
                     fs = exe.submit(combine_b, start_path, batched_vasp_future, b_futures[-1],
                                     resource_dict={"cores": 1, "cwd": start_path+"vasp-energy",
@@ -217,11 +217,10 @@ def main():
 
             if pareto_mode:
                 print("COST jobs submission...", flush=True)
-                nconfigs4cost = config["MAIN"]["nconfigurations_for_cost"]
                 for i in costs:  # Loop over hyperparameters_list_noeweight
                     hyperparams = hyperparameters_list_noeweight[i]
                     rcuts = hyperparams[0]
-                    atoms4cost = df["ase_atoms"].sample(n=nconfigs4cost,random_state=42).to_list()
+                    atoms4cost = df["ase_atoms"].sample(n=batch_size,random_state=42).to_list()
                     costs_directory = start_path + "costs/"
                     costs_directory += hyperparameters_to_string(mlip, hyperparams, delimiter='_', w_eweight=False)
                     os.makedirs(costs_directory, exist_ok=True)

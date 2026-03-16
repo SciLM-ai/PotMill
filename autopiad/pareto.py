@@ -24,6 +24,7 @@ def pareto(start_path, vasp_batch_idx, hyperparameters_list, hyperparameters_lis
     for i in range(len(hyperparameters_list_noeweight)):
         costs_directory = start_path + "costs/"
         if mlip == "ACE":
+            print("hyperparameters_list_noeweight",hyperparameters_list_noeweight[i])
             rcuts, nmaxes, lmaxes = hyperparameters_list_noeweight[i]
             values_list = rcuts + nmaxes + lmaxes
             costs_directory += ace_hyperparameters_to_string(hyperparameters_list_noeweight[i], delimiter='_', w_eweight=False)
