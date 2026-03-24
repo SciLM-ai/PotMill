@@ -1,27 +1,35 @@
 import os
 import sys
 import csv
+import time
 import threading
 import subprocess
 from datetime import datetime
 
 
-class GPUMonitor:
-    """Background GPU utilization monitor using nvidia-smi.
+TASK_STAGES = [
+    "entropy", "labeling", "b_collecting", "featurization",
+    "fitting", "cost", "pareto", "pops",
+]
 
-    Runs as a daemon thread, logging GPU stats to CSV and printing
-    periodic summaries to stdout. Designed as a context manager.
+
+class ResourceMonitor:
+    """Background GPU, CPU, and task progress monitor.
+
+    Runs as a daemon thread, logging aggregated resource stats and
+    pipeline task counts to CSV. Designed as a context manager.
     """
 
-    QUERY_FIELDS = (
+    GPU_QUERY_FIELDS = (
         "index,name,utilization.gpu,utilization.memory,"
         "memory.used,memory.total,temperature.gpu,power.draw"
     )
     CSV_HEADER = [
-        "timestamp", "node_rank", "gpu_index", "gpu_name",
-        "gpu_util_pct", "mem_util_pct", "mem_used_mib", "mem_total_mib",
-        "temperature_c", "power_draw_w",
-    ]
+        "timestamp", "elapsed_s",
+        "mean_gpu_util_pct", "mean_gpu_mem_util_pct",
+        "mean_gpu_mem_used_gib", "mean_gpu_power_w",
+        "mean_cpu_util_pct",
+    ] + [col for s in TASK_STAGES for col in (f"n_{s}", f"n_{s}_running")]
 
     def __init__(self, log_dir, interval=30.0, console_interval=60.0,
                  nodelist=None, n_nodes=1):
@@ -37,16 +45,20 @@ class GPUMonitor:
         self._lock = threading.Lock()
         self._latest = None
         self._last_console_time = 0.0
+        self._start_time = None
+        self._prev_cpu_stats = {}  # node_rank -> (total, active)
+        self._task_counts = {}     # stage_name -> remaining count
 
     def __enter__(self):
-        csv_path = os.path.join(self.log_dir, "gpu_utilization.csv")
+        csv_path = os.path.join(self.log_dir, "pipeline_monitor.csv")
         self._csv_file = open(csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file)
         self._csv_writer.writerow(self.CSV_HEADER)
         self._csv_file.flush()
+        self._start_time = time.monotonic()
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
-        print(f"[GPU] Monitor started — logging to {csv_path}", flush=True)
+        print(f"[Monitor] Started — logging to {csv_path}", flush=True)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -54,37 +66,53 @@ class GPUMonitor:
         if self._thread is not None:
             self._thread.join(timeout=10)
         if self._csv_file is not None:
+            self._csv_file.flush()
             self._csv_file.close()
-        print("[GPU] Monitor stopped", flush=True)
+        print("[Monitor] Stopped", flush=True)
         return False
+
+    def update_task_counts(self, counts):
+        """Update pipeline task remaining counts (called from main thread).
+
+        Args:
+            counts: dict mapping stage name to remaining future count, e.g.
+                     {"entropy": 30, "labeling": 8, ...}
+        """
+        with self._lock:
+            self._task_counts = counts.copy()
 
     def get_latest(self):
         with self._lock:
             return self._latest
 
     def _monitor_loop(self):
-        import time
         while not self._stop_event.is_set():
             try:
-                data = self._collect_gpu_data()
-                if data:
-                    self._write_csv(data)
-                    with self._lock:
-                        self._latest = data
-                    now = time.monotonic()
-                    if now - self._last_console_time >= self.console_interval:
-                        self._print_console_summary(data)
-                        self._last_console_time = now
+                elapsed_s = time.monotonic() - self._start_time
+                gpu_data = self._collect_gpu_data()
+                cpu_util = self._collect_cpu_data()
+                with self._lock:
+                    task_counts = self._task_counts.copy()
+                    self._latest = gpu_data
+
+                self._write_csv(elapsed_s, gpu_data, cpu_util, task_counts)
+
+                now = time.monotonic()
+                if now - self._last_console_time >= self.console_interval:
+                    self._print_console_summary(gpu_data, cpu_util, task_counts)
+                    self._last_console_time = now
             except Exception as e:
                 import traceback
-                print(f"[GPU] Warning: monitoring error: {e}", file=sys.stderr, flush=True)
+                print(f"[Monitor] Warning: monitoring error: {e}", file=sys.stderr, flush=True)
                 traceback.print_exc()
             self._stop_event.wait(self.interval)
+
+    # ---- GPU collection (nvidia-smi) ----
 
     def _collect_gpu_data(self):
         query_args = [
             "nvidia-smi",
-            f"--query-gpu={self.QUERY_FIELDS}",
+            f"--query-gpu={self.GPU_QUERY_FIELDS}",
             "--format=csv,noheader,nounits",
         ]
         if self.n_nodes > 1:
@@ -94,23 +122,22 @@ class GPUMonitor:
             cmd = query_args
             timeout = 10
 
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
-        )
-        if result.returncode != 0:
-            print(f"[GPU] Warning: nvidia-smi returned {result.returncode}: "
-                  f"{result.stderr.strip()}", file=sys.stderr, flush=True)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             return None
-        return self._parse_output(result.stdout)
+        if result.returncode != 0:
+            return None
+        return self._parse_gpu_output(result.stdout)
 
-    def _parse_output(self, output):
+    def _parse_gpu_output(self, output):
         rows = []
-        timestamp = datetime.now().isoformat(timespec="seconds")
         for line in output.strip().splitlines():
             line = line.strip()
             if not line:
                 continue
-            # Multi-node: flux exec -l prefixes "RANK: " to each line
             if self.n_nodes > 1 and ": " in line:
                 rank_str, rest = line.split(": ", 1)
                 try:
@@ -126,7 +153,6 @@ class GPUMonitor:
                 continue
 
             rows.append({
-                "timestamp": timestamp,
                 "node_rank": rank,
                 "gpu_index": parts[0],
                 "gpu_name": parts[1],
@@ -139,55 +165,151 @@ class GPUMonitor:
             })
         return rows
 
-    def _write_csv(self, data):
-        for row in data:
-            self._csv_writer.writerow([row[h] for h in self.CSV_HEADER])
-        self._csv_file.flush()
+    # ---- CPU collection (/proc/stat) ----
 
-    def _print_console_summary(self, data):
-        if not data:
-            return
+    def _collect_cpu_data(self):
+        """Read /proc/stat and compute CPU utilization via delta."""
+        if self.n_nodes > 1:
+            cmd = ["flux", "exec", "-r", "all", "-l", "head", "-1", "/proc/stat"]
+            timeout = 30
+        else:
+            cmd = ["head", "-1", "/proc/stat"]
+            timeout = 10
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return None
+        if result.returncode != 0:
+            return None
+
         utils = []
-        mem_used = []
-        mem_total = []
-        for row in data:
+        for line in result.stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if self.n_nodes > 1 and ": " in line:
+                rank_str, rest = line.split(": ", 1)
+                try:
+                    rank = int(rank_str)
+                except ValueError:
+                    continue
+            else:
+                rank = 0
+                rest = line
+
+            parts = rest.split()
+            if len(parts) < 5 or parts[0] != "cpu":
+                continue
+            values = [int(x) for x in parts[1:]]
+            idle = values[3]
+            iowait = values[4] if len(values) > 4 else 0
+            total = sum(values)
+            active = total - idle - iowait
+
+            prev = self._prev_cpu_stats.get(rank)
+            if prev is not None:
+                d_total = total - prev[0]
+                d_active = active - prev[1]
+                if d_total > 0:
+                    utils.append(d_active / d_total * 100.0)
+            self._prev_cpu_stats[rank] = (total, active)
+
+        if utils:
+            return sum(utils) / len(utils)
+        return None
+
+    # ---- CSV output ----
+
+    def _write_csv(self, elapsed_s, gpu_data, cpu_util, task_counts):
+        gpu_utils, mem_utils, mem_used, powers = [], [], [], []
+        for row in (gpu_data or []):
             try:
-                utils.append(float(row["gpu_util_pct"]))
+                gpu_utils.append(float(row["gpu_util_pct"]))
+                mem_utils.append(float(row["mem_util_pct"]))
                 mem_used.append(float(row["mem_used_mib"]))
-                mem_total.append(float(row["mem_total_mib"]))
+                powers.append(float(row["power_draw_w"]))
             except (ValueError, TypeError):
                 continue
-        if not utils:
-            return
-        n = len(utils)
-        avg_util = sum(utils) / n
-        min_util = min(utils)
-        max_util = max(utils)
-        avg_mem = sum(mem_used) / n / 1024
-        avg_mem_total = sum(mem_total) / n / 1024 if mem_total else 0
-        now = datetime.now().strftime("%H:%M:%S")
-        summary = (f"[GPU] {now} | {n} GPUs | "
-                   f"Util: avg={avg_util:.0f}% min={min_util:.0f}% max={max_util:.0f}% | "
-                   f"Mem: avg={avg_mem:.1f}/{avg_mem_total:.1f} GiB")
+        n = len(gpu_utils) or 1
 
-        if self.n_nodes > 1:
-            # Per-node breakdown
-            by_node = {}
-            for row in data:
-                rank = row["node_rank"]
-                by_node.setdefault(rank, []).append(row)
-            parts = []
-            for rank in sorted(by_node.keys()):
-                node_utils = []
-                for r in by_node[rank]:
-                    try:
-                        node_utils.append(float(r["gpu_util_pct"]))
-                    except (ValueError, TypeError):
-                        continue
-                if node_utils:
-                    node_avg = sum(node_utils) / len(node_utils)
-                    parts.append(f"N{rank}={node_avg:.0f}%")
-            if parts:
-                summary += " | " + " ".join(parts)
+        csv_row = [
+            datetime.now().isoformat(timespec="seconds"),
+            f"{elapsed_s:.1f}",
+            f"{sum(gpu_utils)/n:.1f}" if gpu_utils else "",
+            f"{sum(mem_utils)/n:.1f}" if mem_utils else "",
+            f"{sum(mem_used)/n/1024:.2f}" if mem_used else "",
+            f"{sum(powers)/n:.1f}" if powers else "",
+            f"{cpu_util:.1f}" if cpu_util is not None else "",
+        ]
+        for stage in TASK_STAGES:
+            val = task_counts.get(stage)
+            csv_row.append(str(val) if val is not None else "")
+            val_running = task_counts.get(f"{stage}_running")
+            csv_row.append(str(val_running) if val_running is not None else "")
 
-        print(summary, flush=True)
+        self._csv_writer.writerow(csv_row)
+        self._csv_file.flush()
+
+    # ---- Console summary ----
+
+    def _print_console_summary(self, gpu_data, cpu_util, task_counts):
+        lines = []
+
+        # GPU summary
+        if gpu_data:
+            utils = []
+            mem_used = []
+            mem_total = []
+            for row in gpu_data:
+                try:
+                    utils.append(float(row["gpu_util_pct"]))
+                    mem_used.append(float(row["mem_used_mib"]))
+                    mem_total.append(float(row["mem_total_mib"]))
+                except (ValueError, TypeError):
+                    continue
+            if utils:
+                n = len(utils)
+                avg_util = sum(utils) / n
+                min_util = min(utils)
+                max_util = max(utils)
+                avg_mem = sum(mem_used) / n / 1024
+                avg_mem_total = sum(mem_total) / n / 1024 if mem_total else 0
+                now = datetime.now().strftime("%H:%M:%S")
+                gpu_line = (f"[Monitor] {now} | {n} GPUs | "
+                            f"Util: avg={avg_util:.0f}% min={min_util:.0f}% max={max_util:.0f}% | "
+                            f"Mem: avg={avg_mem:.1f}/{avg_mem_total:.1f} GiB")
+
+                if self.n_nodes > 1:
+                    by_node = {}
+                    for row in gpu_data:
+                        rank = row["node_rank"]
+                        by_node.setdefault(rank, []).append(row)
+                    parts = []
+                    for rank in sorted(by_node.keys()):
+                        node_utils = []
+                        for r in by_node[rank]:
+                            try:
+                                node_utils.append(float(r["gpu_util_pct"]))
+                            except (ValueError, TypeError):
+                                continue
+                            if node_utils:
+                                node_avg = sum(node_utils) / len(node_utils)
+                                parts.append(f"N{rank}={node_avg:.0f}%")
+                    if parts:
+                        gpu_line += " | " + " ".join(parts)
+                lines.append(gpu_line)
+
+        # CPU summary
+        if cpu_util is not None:
+            lines.append(f"[Monitor] CPU Util: avg={cpu_util:.0f}%")
+
+        # Active stages
+        active = [f"{s}({c})" for s, c in task_counts.items() if c and c > 0]
+        if active:
+            lines.append(f"[Monitor] Active: {' '.join(active)}")
+
+        for line in lines:
+            print(line, flush=True)

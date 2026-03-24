@@ -10,11 +10,17 @@ from autopiad.fake_vasp import fake_vasp
 from autopiad.fit import fit
 from autopiad.pareto import pareto
 from autopiad.pops import pops
-from autopiad.monitor import GPUMonitor
+from autopiad.monitor import ResourceMonitor
 import flux
 import concurrent.futures
 import flux.job
 from executorlib import FluxJobExecutor
+
+
+def _count_running(futures, list_of_lists=False):
+    if list_of_lists:
+        return sum(1 for sub in futures for f in sub if f.running())
+    return sum(1 for f in futures if f.running())
 
 
 def check_and_print_status(futures, name, total, list_of_lists=False):
@@ -96,7 +102,7 @@ def main():
 
     print("NODELIST:", rs.nodelist, " #CORES:", all_ncores, " #GPUS:", all_ngpus, flush=True)
 
-    gpu_monitor = GPUMonitor(
+    monitor = ResourceMonitor(
         log_dir=os.getcwd(),
         interval=1.0,
         console_interval=10.0,
@@ -187,7 +193,7 @@ def main():
     ncores_per_featurization = 10
     n_featurize_workers = max(1, all_ncores // ncores_per_featurization)
 
-    with gpu_monitor, flux.job.FluxExecutor() as flux_executor:
+    with monitor, flux.job.FluxExecutor() as flux_executor:
 
       with FluxJobExecutor(flux_log_files=True, max_workers=n_entropy_workers, flux_executor=flux_executor,
                            block_allocation=True, init_function=make_init_atoms_from_entropy(structuregen_config), 
@@ -312,6 +318,26 @@ def main():
                 entropy_exe_shutdown = False
                 labeling_exe_shutdown = False
                 featurize_exe_shutdown = False
+
+                monitor.update_task_counts({
+                    "entropy": len(entropy_atoms_futures),
+                    "entropy_running": _count_running(entropy_atoms_futures),
+                    "labeling": len(labeling_futures),
+                    "labeling_running": _count_running(labeling_futures),
+                    "b_collecting": len(b_futures),
+                    "b_collecting_running": _count_running(b_futures),
+                    "featurization": sum(len(f) for f in featurization_futures),
+                    "featurization_running": _count_running(featurization_futures, list_of_lists=True),
+                    "fitting": sum(len(f) for f in fitting_futures),
+                    "fitting_running": _count_running(fitting_futures, list_of_lists=True),
+                    "cost": len(cost_futures),
+                    "cost_running": _count_running(cost_futures),
+                    "pareto": len(pareto_futures),
+                    "pareto_running": _count_running(pareto_futures),
+                    "pops": len(pops_futures),
+                    "pops_running": _count_running(pops_futures),
+                })
+
                 total_n_futures = 1  # enter loop
                 while total_n_futures > 0:
 
@@ -353,6 +379,25 @@ def main():
                     total_n_futures = (len(entropy_atoms_futures) + len(labeling_futures) + len(b_futures) +
                                         len(featurization_futures) + len(fitting_futures) + len(cost_futures) +
                                         len(pareto_futures) + len(pops_futures))
+
+                    monitor.update_task_counts({
+                        "entropy": len(entropy_atoms_futures),
+                        "entropy_running": _count_running(entropy_atoms_futures),
+                        "labeling": len(labeling_futures),
+                        "labeling_running": _count_running(labeling_futures),
+                        "b_collecting": len(b_futures),
+                        "b_collecting_running": _count_running(b_futures),
+                        "featurization": sum(len(f) for f in featurization_futures),
+                        "featurization_running": _count_running(featurization_futures, list_of_lists=True),
+                        "fitting": sum(len(f) for f in fitting_futures),
+                        "fitting_running": _count_running(fitting_futures, list_of_lists=True),
+                        "cost": len(cost_futures),
+                        "cost_running": _count_running(cost_futures),
+                        "pareto": len(pareto_futures),
+                        "pareto_running": _count_running(pareto_futures),
+                        "pops": len(pops_futures),
+                        "pops_running": _count_running(pops_futures),
+                    })
 
                 exe.shutdown(wait=False)
 

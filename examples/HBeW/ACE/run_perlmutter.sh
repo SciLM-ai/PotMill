@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J WRe
+#SBATCH -J HBeW
 #SBATCH --account=m1883_g
 #SBATCH --constraint=gpu
 #SBATCH --gpus-per-node=4
