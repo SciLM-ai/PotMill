@@ -7,7 +7,7 @@ from autopiad.vasp import vasp
 from autopiad.uma import uma, init_uma_calculator
 from autopiad.lammps import lammps
 from autopiad.fake_vasp import fake_vasp
-from autopiad.fit import fit
+from autopiad.fit import fit, init_fit
 from autopiad.pareto import pareto
 from autopiad.pops import pops
 from autopiad.monitor import ResourceMonitor
@@ -99,6 +99,7 @@ def main():
     rl = flux.resource.list.resource_list(handle).get()
     all_ncores = rl.all.ncores
     all_ngpus = rl.all.ngpus
+    nnodes = len(list(rs.nodelist))
 
     print("NODELIST:", rs.nodelist, " #CORES:", all_ncores, " #GPUS:", all_ngpus, flush=True)
 
@@ -127,12 +128,24 @@ def main():
     batch_size = config["MAIN"]["batch_size"]
     ncores_per_fit = config["MAIN"]["ncores_per_fit"]
     auto_reduce_hps = config["MAIN"]["auto_reduce_hyperparameters"]
+    # GPU split for labeling vs fitting (config-driven; defaults to 2 fit GPUs/node, GPU QR).
+    gpus_per_node = all_ngpus // nnodes if nnodes else 0
+    fit_gpus_per_node = config["MAIN"].get("fit_gpus_per_node", 2)
+    fit_device = config["MAIN"].get("fit_device", "cuda")
+    fit_method = config["MAIN"].get("fit_method", "svd")
+    assert 0 < fit_gpus_per_node < gpus_per_node, \
+        f"fit_gpus_per_node ({fit_gpus_per_node}) must be >0 and leave GPUs for labeling " \
+        f"(gpus_per_node={gpus_per_node})"
+    n_fit_workers = fit_gpus_per_node * nnodes
+    n_label_workers = (gpus_per_node - fit_gpus_per_node) * nnodes
+    print(f"GPU split: {n_label_workers} labeling + {n_fit_workers} fitting workers "
+          f"({gpus_per_node}/node total) | fit_device={fit_device} fit_method={fit_method}", flush=True)
     structuregen_config = config.get("STRUCTUREGEN", {})
     if "elements" not in structuregen_config:
         # Fall back to chem_elem from FitSNAP section for backwards compatibility
         structuregen_config["elements"] = config["FitSNAP"]["chem_elem"]
     # Parallel entropy worker configuration
-    n_entropy_workers = structuregen_config.get("n_entropy_workers", 1)
+    n_entropy_workers = structuregen_config.get("n_entropy_workers", 1) * nnodes  # inputfile = per-node; total = per-node * nnodes
     threads_per_worker = max(1, 32 // n_entropy_workers)
     structuregen_config["n_threads"] = threads_per_worker
     if n_entropy_workers > 1 and structuregen_config.get("strict_entropy_decrease", 0):
@@ -190,8 +203,10 @@ def main():
     pareto_futures = []
     pops_futures = []
 
-    ncores_per_featurization = 10
-    n_featurize_workers = max(1, all_ncores // ncores_per_featurization)
+    ncores_per_featurization = 4
+    # featurize is throughput-bound; allow >1 worker/node (config knob, default 1/node).
+    n_featurize_workers = config["MAIN"].get("featurize_workers_per_node", 1) * nnodes
+    print(f"Featurize: {n_featurize_workers} workers ({n_featurize_workers//nnodes}/node) x {ncores_per_featurization} cores", flush=True)
 
     with monitor, flux.job.FluxExecutor() as flux_executor:
 
@@ -200,7 +215,7 @@ def main():
                            resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1, "threads_per_core": threads_per_worker,
                                           "cwd": start_path+"entropy", "error_log_file":"error.out"}) as entropy_exe:
         
-        with FluxJobExecutor(flux_log_files=True, max_workers=all_ngpus, flux_executor=flux_executor,
+        with FluxJobExecutor(flux_log_files=True, max_workers=n_label_workers, flux_executor=flux_executor,
                              block_allocation=True, init_function=init_uma_calculator,
                              resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1,
                                             "cwd": start_path+"labeling", "error_log_file": "error.out"}) as labeling_exe:
@@ -210,7 +225,12 @@ def main():
                                resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0, "num_nodes": 1,
                                               "cwd": start_path+"features", "error_log_file":"error.out"}) as featurize_exe:
 
-            with FluxJobExecutor(flux_log_files=True, flux_executor=flux_executor) as exe:
+            with FluxJobExecutor(flux_log_files=True, max_workers=n_fit_workers, flux_executor=flux_executor,
+                                 block_allocation=True, init_function=init_fit,
+                                 resource_dict={"cores": 1, "threads_per_core": ncores_per_fit,
+                                                "gpus_per_core": 1, "num_nodes": 1,
+                                                "cwd": start_path+"fits", "error_log_file": "error.out"}) as fitting_exe, \
+                 FluxJobExecutor(flux_log_files=True, flux_executor=flux_executor) as exe:
 
                 # Give block-allocated workers time to submit their Flux jobs.
                 # Without this, the main thread's rapid task submissions hold the GIL,
@@ -265,11 +285,11 @@ def main():
                             fit_directory = f"{start_path}fits/{i}/"
                             fit_directory += hyperparameters_to_string(mlip, hyperparameters_list[j], delimiter='_')
                             os.makedirs(fit_directory, exist_ok=True)
-                            fs = exe.submit(fit, f"{start_path}features/", featurization_futures[i][rcut_idx], b_future,
+                            # fitting_exe is block-allocated (fixed cwd/resources): no per-submit
+                            # resource_dict; fit() chdir's to fit_directory itself (like uma()).
+                            fs = fitting_exe.submit(fit, f"{start_path}features/", featurization_futures[i][rcut_idx], b_future,
                                             hyperparameters_list[j], mlip, batch_ID=i,
-                                            resource_dict={"cores": 1, "threads_per_core": ncores_per_fit,
-                                                            "gpus_per_core": 0, "num_nodes": 1, "cwd": fit_directory,
-                                                            "error_log_file": "error.out"})
+                                            fit_directory=fit_directory, fit_device=fit_device, fit_method=fit_method)
                             fs.task_ = (i,j)
                             fitting_futures_temp.append(fs)
                         fitting_futures.append(fitting_futures_temp)
