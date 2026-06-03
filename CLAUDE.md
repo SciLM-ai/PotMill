@@ -82,6 +82,27 @@ Both methods follow the same two-phase approach:
 srun -N $SLURM_NNODES -n $SLURM_NNODES flux start python -u -m autopiad
 ```
 
+## Run directory placement (ALWAYS use $SCRATCH)
+
+**Always run pipelines on `$SCRATCH` (Lustre), NOT `$WORK` (CFS).** A controlled A/B test
+(2026-06-02) showed `$SCRATCH` is ~1.7× faster than CFS for entropy generation due to much
+lower metadata-server latency on the many small per-config writes (descriptors, labeling
+trajs, features). CPU util on CFS was ~5–20% (workers I/O-blocked) vs ~40% on SCRATCH
+(workers actually computing).
+
+Workflow pattern (implemented in `launch_scratch.sh`):
+1. `$WORK/autopiad_runs/` keeps persistent inputs (`inputfile_*`, `FitSNAP.in`, `sbatch_*.sh`,
+   `launch_scratch.sh`) and small post-run results in `<name>_results/`
+   (`pipeline_monitor.csv`, `pareto-front/`, log).
+2. `$SCRATCH/autopiad_experiments/<run_name>/` is the working directory during execution —
+   all heavy intermediate files (`entropy/`, `labeling/`, `features/`, `fits/`) live here.
+3. After the job, `launch_scratch.sh` copies the small artifacts back to
+   `$WORK/autopiad_runs/<name>_results/`. The heavy scratch dir is left in place for
+   analysis (or eventual scratch purge).
+
+Do **not** put run output dirs under `$WORK/autopiad_runs/<name>` directly anymore — use
+`launch_scratch.sh`.
+
 ## Configuration
 
 The pipeline is configured via an `inputfile` in the working directory. Key sections:
@@ -89,6 +110,32 @@ The pipeline is configured via an `inputfile` in the working directory. Key sect
 - `[FitSNAP]`: MLIP type (ACE/SNAP), element specification
 - `[STRUCTUREGEN]`: Structure generation method and parameters
 - `[RCUT]`, `[NMAX]`, `[LMAX]`, `[TWOJMAX]`, `[EWEIGHT]`: Hyperparameter grids
+
+## Configuration constraints
+
+When `[RCUT] max_rcut` in the inputfile is increased, the `pair_style` cutoff in `FitSNAP.in`
+(`[REFERENCE]` section) MUST also be `>= max_rcut`. Otherwise LAMMPS aborts every featurize task
+with `rcut > pair_style cutoff` with:
+
+```
+ERROR: Compute pace cutoff is longer than pairwise cutoff (src/ML-PACE/compute_pace.cpp:129)
+```
+
+The pipeline prints a `WARNING:` line at startup if it detects this mismatch (logic lives in
+`autopiad/__main__.py` right after the hyperparameter setup). It does NOT auto-override the
+user's `pair_style` — users may have custom pair_style setups (more complex than `zero <X>`),
+so the right action is to update `FitSNAP.in`:
+
+```
+pair_style = zero <X>     # with X >= max_rcut + 0.1
+```
+
+(With `restart_limit=3` on the block executors, executorlib fails the offending tasks cleanly
+rather than deadlocking the whole pipeline. But the affected tasks' results are still lost, so
+this is not a substitute for fixing FitSNAP.in.)
+
+**Agents: if you see the `WARNING: FitSNAP.in [REFERENCE] pair_style cutoff ...` line at startup,
+surface it to the user immediately and propose the one-line fix to FitSNAP.in.**
 
 ## Dependencies
 

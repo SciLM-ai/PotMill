@@ -5,10 +5,16 @@ featurize = 1
 labeling = 1
 fit = 1
 pareto = 1
-pops = 1
-nconfigurations = 5000
-batch_size = 200
-ncores_per_fit = 5
+pops = 0
+nconfigurations = 100000
+batch_size = 1000
+ncores_per_fit = 1
+featurize_workers_per_node = 5
+fit_gpus_per_node = 2
+fit_device = cuda
+fit_method = svd
+n_fold = 3
+fit_engine = incremental
 auto_reduce_hyperparameters = 0
 
 [FitSNAP]
@@ -17,27 +23,27 @@ chem_elem = H Be W
 filename = FitSNAP.in
 
 [RCUT]
-min_rcut = 4
-max_rcut = 5
-num_rcut = 2
+min_rcut = 5
+max_rcut = 6.5
+num_rcut = 4
 
 [NMAX]
-min_nmax = 6 2
-max_nmax = 8 3
+min_nmax = 5 2
+max_nmax = 9 4
 
 [LMAX]
 min_lmax = 0 1
-max_lmax = 0 1
+max_lmax = 0 4
 
 [EWEIGHT]
 middle_eweight = 10
-num_eweights = 3
+num_eweights = 5
 constant = 1
 
 [STRUCTUREGEN]
 method = multi_element
 elements = H Be W
-n_entropy_workers = 64
+n_entropy_workers = 32
 twojmax = 8
 n_atoms_min = 2
 n_atoms_max = 25

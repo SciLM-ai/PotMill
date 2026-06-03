@@ -10,12 +10,16 @@ def pareto(start_path, vasp_batch_idx, hyperparameters_list, hyperparameters_lis
     results_df = pd.DataFrame()
     for results_dir in results_dirs:
         results_ = pd.read_csv(results_dir+"/results.csv", header=None)
-        columns_list = ["rcut"+str(i) for i in range(len(hyperparameters_list[0][0]))]
+        # Column dims come from hyperparameters_list_noeweight (the resolved cost_futures), which is
+        # always [[rcut],[nmax],[lmax]] / [[rcut],[twojmax]] -- engine-agnostic. hyperparameters_list
+        # (arg 3) is only a dependency barrier (in the incremental engine it resolves to state-file
+        # paths, not hyperparameters, so it must NOT be used for column structure).
+        columns_list = ["rcut"+str(i) for i in range(len(hyperparameters_list_noeweight[0][0]))]
         if mlip == "ACE":
-            columns_list.extend(["nmax"+str(i+1) for i in range(len(hyperparameters_list[0][1]))])
-            columns_list.extend(["lmax"+str(i+1) for i in range(len(hyperparameters_list[0][2]))])
+            columns_list.extend(["nmax"+str(i+1) for i in range(len(hyperparameters_list_noeweight[0][1]))])
+            columns_list.extend(["lmax"+str(i+1) for i in range(len(hyperparameters_list_noeweight[0][2]))])
         elif mlip == "SNAP":
-            columns_list.extend(["twojmax"+str(i) for i in range(len(hyperparameters_list[0][1]))])
+            columns_list.extend(["twojmax"+str(i) for i in range(len(hyperparameters_list_noeweight[0][1]))])
         columns_list.extend(["eweight","train_e_rmse","train_f_rmse","test_e_rmse","test_f_rmse",
                              "train_e_rmse_weighted","train_f_rmse_weighted","test_e_rmse_weighted","test_f_rmse_weighted"])
         results_df = pd.concat([results_df,pd.DataFrame(results_.mean().values[1:].reshape(1,-1), columns=columns_list)])

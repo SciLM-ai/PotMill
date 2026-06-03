@@ -14,7 +14,7 @@ def init_featurize():
 
 
 def featurize(atoms_traj, config, fitsnap_config, rcuts, feature_directory,
-              only_cost=False, hyperparameters_noeweight=None,
+              only_cost=False, hyperparameters_noeweight=None, cost_nstructures=None,
               comm=None, rank=0, size=1):
 
     if comm is None:
@@ -36,13 +36,23 @@ def featurize(atoms_traj, config, fitsnap_config, rcuts, feature_directory,
         if isinstance(atoms_traj[0], dict):
             atoms_traj = [atoms["atoms"] for atoms in atoms_traj]
 
+    # cost is only a featurization-TIMING probe for the Pareto cost axis -- it does not need the whole
+    # batch. Cap it at cost_nstructures (set in __main__) so the one-per-subset cost tasks finish in
+    # seconds instead of ~6.5 min each on the full ~1000-config batch (which otherwise hogs the
+    # dynamic-exe cores and starves combine_b). Real featurization (only_cost=False) is untouched.
+    if only_cost and cost_nstructures is not None and isinstance(atoms_traj, list):
+        atoms_traj = atoms_traj[:cost_nstructures]
+
     configs_num = len(atoms_traj)
     ratio = configs_num//size
     rem = configs_num%size
     a1 = rank*ratio + min(rank,rem)
     a2 = (rank+1)*ratio + min(rank,rem-1) + 1
 
-    print("rcuts = " + rcuts_to_string(rcuts), flush=True)
+    import time as _time
+    _t0 = _time.time()
+    print(f"featurize START: dir={os.getcwd()} nconfigs={configs_num} only_cost={only_cost} "
+          f"rcuts={rcuts_to_string(rcuts)}", flush=True)
     if config['FitSNAP']['mlip'] == "ACE":
         if len(rcuts) == 1:
             fitsnap_config["ACE"]["rcutfac"] = rcuts_to_string(rcuts*(int(fitsnap_config["ACE"]["numTypes"])**2))
@@ -60,7 +70,14 @@ def featurize(atoms_traj, config, fitsnap_config, rcuts, feature_directory,
     if rank == 0:
         os.system("rm -rf coupling_coefficients.yace *.pickle")
         if not only_cost:
-            np.save("a.npy", fs.pt.shared_arrays["a"].array)
+            a_arr = fs.pt.shared_arrays["a"].array
+            n_bad = int(np.sum(~np.isfinite(a_arr)))
+            if n_bad:
+                print(f"WARNING: featurize {os.getcwd()} a.npy has {n_bad} non-finite "
+                      f"descriptor values (degenerate config?)", flush=True)
+            np.save("a.npy", a_arr)
+            print(f"featurize DONE: dir={os.getcwd()} shape={a_arr.shape} "
+                  f"n_nonfinite={n_bad} took={_time.time()-_t0:.1f}s", flush=True)
 
             bnames = []
             if config['FitSNAP']['mlip'] == "ACE":

@@ -4,9 +4,9 @@ def pops(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamet
 
     import numpy as np
     import pandas as pd
-    import random
     from POPSRegression import POPSRegression
     from autopiad.tools import rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
+    from autopiad.fit import config_fold
 
     if isinstance(feature_names[0][0],list): feature_names = feature_names[0]
     
@@ -27,25 +27,23 @@ def pops(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamet
     
     print(len(feature_indices), len(feature_names), flush=True)
     b_size = len(vasp_IDs_ready_for_fit)
-    b_vect = pd.read_csv(f"{features_directory}b{b_size}.csv", index_col=0, header=None).sort_index()
+    # NO sort_index: rows stay in raw (config-major) order, aligned with a.npy.
+    b_vect = pd.read_csv(f"{features_directory}b{b_size}.csv", header=None)
     a_matr = []
     if batch_ID is None:
-        b_vect_index = b_vect.index.to_numpy()
         a_matr_map = np.load(f"{features_directory}{rcuts_to_string(rcuts,delimiter='_')}/a.npy", mmap_mode='r')
-        a_matr = a_matr_map[b_vect_index[:, None],feature_indices]
+        a_matr = np.ascontiguousarray(a_matr_map[:,feature_indices])
     else:
         for id in range(batch_ID+1):
             a_matr_map = np.load(f"{features_directory}{id}/{rcuts_to_string(rcuts,delimiter='_')}/a.npy", mmap_mode='r')
             a_matr.append(a_matr_map[:,feature_indices])
         a_matr = np.concatenate(a_matr)
-    b_vect.reset_index(inplace=True)
-    b_vect_no_dupl = b_vect.drop_duplicates(subset=1)
-    job_ids = b_vect_no_dupl[1].to_list()
-    energy_selector = b_vect_no_dupl.index.to_list()
-    force_selector = b_vect.drop(index=energy_selector).index.to_list()
-    assert len(force_selector)+len(energy_selector) == b_vect.shape[0]
-    # log_file = fit_directory + "fit_report_rcut_%.3f_2jmax_%i.txt" % hyperparameters
-    # with open(log_file, 'w') as sys.stdout:
+    job_id_col = b_vect[1].values
+    is_energy = (b_vect[0].values == 0)                      # energy row = local index 0 per config
+    assert a_matr.shape[0] == b_vect.shape[0], (a_matr.shape[0], b_vect.shape[0])
+    # fixed config->fold partition (per row), proper k-fold (test = 1/n_fold)
+    fold_of_job = {int(j): config_fold(j, n_fold) for j in np.unique(job_id_col)}
+    part = np.array([fold_of_job[int(j)] for j in job_id_col])
 
     for fold in range(n_fold):
 
@@ -56,23 +54,19 @@ def pops(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamet
         if mlip == "SNAP":
             print("Hyperparameters rcut, 2Jmax and eweight are " + rcuts_to_string(rcuts) + ", " +
                 twojmaxes_to_string(twojmaxes) + " and %.3f"%eweight, flush=True)
-        
-        random.seed(fold)
-        random.shuffle(job_ids)
-        train_ids = job_ids[:int(train_fraction*len(job_ids))]
-        test_ids = job_ids[int(train_fraction*len(job_ids)):]
-        train_index = b_vect[b_vect[1].isin(train_ids)].index.to_list()
-        test_index = b_vect[b_vect[1].isin(test_ids)].index.to_list()
+
+        train_index = np.where(part != fold)[0]
+        test_index = np.where(part == fold)[0]
 
         a_train = a_matr[train_index]
         a_test = a_matr[test_index]
         b_train = b_vect[2].values[train_index]
         b_test = b_vect[2].values[test_index]
-        
-        energy_selector_train = np.in1d(train_index, energy_selector)
-        energy_selector_test = np.in1d(test_index, energy_selector)
-        force_selector_train = np.in1d(train_index, force_selector)
-        force_selector_test = np.in1d(test_index, force_selector)
+
+        energy_selector_train = is_energy[train_index]
+        energy_selector_test = is_energy[test_index]
+        force_selector_train = ~energy_selector_train
+        force_selector_test = ~energy_selector_test
         
         eweights_train = np.exp(-b_train[energy_selector_train]/5)
         eweights_train /= np.sum(eweights_train)

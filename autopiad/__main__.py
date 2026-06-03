@@ -1,13 +1,13 @@
 import os, pickle
 from autopiad.tools import create_rcut_range, rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
-from autopiad.tools import hyperparameters_to_string
+from autopiad.tools import hyperparameters_to_string, create_eweight_range
 from autopiad.tools import combined_ace_hyperparameters, combined_snap_hyperparameters, parse_inputfile, configparse
 from autopiad.featurize import featurize, init_featurize
 from autopiad.vasp import vasp
 from autopiad.uma import uma, init_uma_calculator
 from autopiad.lammps import lammps
 from autopiad.fake_vasp import fake_vasp
-from autopiad.fit import fit, init_fit
+from autopiad.fit import fit, foldfit, init_fit
 from autopiad.pareto import pareto
 from autopiad.pops import pops
 from autopiad.monitor import ResourceMonitor
@@ -27,26 +27,30 @@ def check_and_print_status(futures, name, total, list_of_lists=False):
     if list_of_lists:
         for i in range(len(futures)):
             if len(futures[i]) != 0:
-                done, futures[i] = concurrent.futures.wait(futures[i], timeout=0.01)
+                done, futures[i] = concurrent.futures.wait(futures[i], timeout=1)
                 if len(done)!=0:
                     print(f"{len(futures[i])} {name}S REMAINING  --- {total-len(futures[i])} {name}S FINISHED  "
                           f"--- {total} {name}S TOTAL", flush=True)
                 break
     else:
-        done, futures = concurrent.futures.wait(futures, timeout=0.1)
+        done, futures = concurrent.futures.wait(futures, timeout=1)
         if len(done)!=0:
             print(f"{len(futures)} {name}S REMAINING  --- {total-len(futures)} {name}S FINISHED  --- "
                   f"{total} {name}S TOTAL", flush=True)
     return futures
 
 
-def combine_b(start_path, labeling_results, labeling_IDs_ready_for_fit):
+def combine_b(start_path, labeling_results, labeling_IDs_ready_for_fit, batch_idx):
     labeling_IDs_finished = [labeling_result["job_ID"] for labeling_result in labeling_results]
     print("Starting b.csv file preparation for the fit...", flush=True)
     new_b_files = " ".join([f"{job_id}/b" for job_id in labeling_IDs_finished])
     new_labeling_IDs_ready_for_fit = labeling_IDs_ready_for_fit + labeling_IDs_finished
     len1, len2 = len(labeling_IDs_ready_for_fit), len(new_labeling_IDs_ready_for_fit)
     os.system(f"cat {start_path}features/b{len1}.csv {new_b_files} > {start_path}features/b{len2}.csv")
+    # Per-batch b file (this batch's configs only) for the incremental foldfit: O(batch), aligned
+    # row-for-row with features/{batch_idx}/<rcut>/a.npy (same config order as featurize used).
+    os.makedirs(f"{start_path}features/{batch_idx}", exist_ok=True)
+    os.system(f"cat {new_b_files} > {start_path}features/{batch_idx}/b_batch.csv")
     return new_labeling_IDs_ready_for_fit
 
 
@@ -89,11 +93,22 @@ def make_init_atoms_from_entropy(structuregen_config):
     return init_atoms_from_entropy
 
 
+_NEXT_ATOMS_FIRST_CALL_DONE = False
+
+
 def next_atoms_from_entropy(entropy_iterator):
-    return next(entropy_iterator)
+    global _NEXT_ATOMS_FIRST_CALL_DONE
+    result = next(entropy_iterator)
+    if not _NEXT_ATOMS_FIRST_CALL_DONE:
+        _NEXT_ATOMS_FIRST_CALL_DONE = True
+        import time as _time, os as _os
+        print(f"HANDOFF_TIMING: first entropy yield pid={_os.getpid()} wall_clock={_time.time():.3f}", flush=True)
+    return result
 
 
 def main():
+    import time as _time
+    print(f"HANDOFF_TIMING: main() start wall_clock={_time.time():.3f}", flush=True)
     handle = flux.Flux()
     rs = flux.resource.status.ResourceStatusRPC(handle).get()
     rl = flux.resource.list.resource_list(handle).get()
@@ -133,6 +148,8 @@ def main():
     fit_gpus_per_node = config["MAIN"].get("fit_gpus_per_node", 2)
     fit_device = config["MAIN"].get("fit_device", "cuda")
     fit_method = config["MAIN"].get("fit_method", "svd")
+    n_fold = config["MAIN"].get("n_fold", 3)            # k for k-fold CV (test = 1/n_fold)
+    fit_engine = config["MAIN"].get("fit_engine", "incremental")  # 'incremental' (R-collecting) | 'rows'
     assert 0 < fit_gpus_per_node < gpus_per_node, \
         f"fit_gpus_per_node ({fit_gpus_per_node}) must be >0 and leave GPUs for labeling " \
         f"(gpus_per_node={gpus_per_node})"
@@ -162,6 +179,24 @@ def main():
         hyperparameters_list = combined_snap_hyperparameters(config)
         hyperparameters_list_noeweight = combined_snap_hyperparameters(config, w_eweight=False)
         fitsnap_config["BISPECTRUM"]["twojmax"] = twojmaxes_to_string(config["TWOJMAX"]["max_twojmax"])
+
+    # WARN (do NOT auto-override -- users may have custom pair_style setups) if FitSNAP.in
+    # [REFERENCE] pair_style cutoff < inputfile [RCUT] max_rcut. LAMMPS compute pace aborts
+    # any featurize task with rcut > pair_style cutoff:
+    #   "ERROR: Compute pace cutoff is longer than pairwise cutoff (src/ML-PACE/compute_pace.cpp:129)"
+    # With restart_limit=3 on the block executors those tasks fail cleanly instead of deadlocking,
+    # but the affected tasks' results are still lost -- so the user should fix FitSNAP.in.
+    # See CLAUDE.md "Configuration constraints".
+    import re as _re
+    _ps_m = _re.match(r"\s*zero\s+([0-9.]+)", fitsnap_config.get("REFERENCE", {}).get("pair_style", ""))
+    if _ps_m and float(_ps_m.group(1)) < float(config["RCUT"]["max_rcut"]):
+        _ps_cut = float(_ps_m.group(1))
+        _max_rcut = float(config["RCUT"]["max_rcut"])
+        print(f"WARNING: FitSNAP.in [REFERENCE] pair_style cutoff ({_ps_cut}) < inputfile "
+              f"[RCUT] max_rcut ({_max_rcut}). LAMMPS will abort featurize tasks with "
+              f"rcut > {_ps_cut} with 'compute pace cutoff > pair_style cutoff' "
+              f"(src/ML-PACE/compute_pace.cpp:129). "
+              f"FIX FitSNAP.in:  pair_style = zero {_max_rcut + 0.1}", flush=True)
 
     if not resume_mode and entropy_mode:
         os.system("rm -rf "+start_path+"entropy")
@@ -211,22 +246,23 @@ def main():
     with monitor, flux.job.FluxExecutor() as flux_executor:
 
       with FluxJobExecutor(flux_log_files=True, max_workers=n_entropy_workers, flux_executor=flux_executor,
-                           block_allocation=True, init_function=make_init_atoms_from_entropy(structuregen_config), 
+                           block_allocation=True, init_function=make_init_atoms_from_entropy(structuregen_config),
+                           restart_limit=3,  # auto-restart dead workers (SaddleMill pattern) so a single worker crash doesn't deadlock _drain_dead_worker
                            resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1, "threads_per_core": threads_per_worker,
                                           "cwd": start_path+"entropy", "error_log_file":"error.out"}) as entropy_exe:
         
         with FluxJobExecutor(flux_log_files=True, max_workers=n_label_workers, flux_executor=flux_executor,
-                             block_allocation=True, init_function=init_uma_calculator,
+                             block_allocation=True, init_function=init_uma_calculator, restart_limit=3,
                              resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1,
                                             "cwd": start_path+"labeling", "error_log_file": "error.out"}) as labeling_exe:
 
           with FluxJobExecutor(flux_log_files=True, max_workers=n_featurize_workers, block_allocation=True, flux_executor=flux_executor,
-                               init_function=init_featurize,
+                               init_function=init_featurize, restart_limit=3,
                                resource_dict={"cores": ncores_per_featurization, "gpus_per_core": 0, "num_nodes": 1,
                                               "cwd": start_path+"features", "error_log_file":"error.out"}) as featurize_exe:
 
             with FluxJobExecutor(flux_log_files=True, max_workers=n_fit_workers, flux_executor=flux_executor,
-                                 block_allocation=True, init_function=init_fit,
+                                 block_allocation=True, init_function=init_fit, restart_limit=3,
                                  resource_dict={"cores": 1, "threads_per_core": ncores_per_fit,
                                                 "gpus_per_core": 1, "num_nodes": 1,
                                                 "cwd": start_path+"fits", "error_log_file": "error.out"}) as fitting_exe, \
@@ -254,9 +290,14 @@ def main():
                         fs.task_ = i
                         labeling_futures.append(fs)
 
+                    # exe.batched batches by COMPLETION order (first n done), so featurize/combine_b start
+                    # on the first batch_size that FINISH -- a straggler in a fixed index-chunk would idle
+                    # the rest, which is exactly what this avoids. (The O(100k)-per-collector ingestion
+                    # stall that made this unusable at 100k is fixed in executorlib's dependency scheduler:
+                    # batched tasks now track only their skip_lst, not the full labeling-futures list.)
                     batched_labeling_futures = exe.batched(labeling_futures, n=batch_size)
                     for i, batched_labeling_future in enumerate(batched_labeling_futures):
-                        fs = exe.submit(combine_b, start_path, batched_labeling_future, b_futures[-1],
+                        fs = exe.submit(combine_b, start_path, batched_labeling_future, b_futures[-1], i,
                                         resource_dict={"cores": 1, "cwd": start_path+"labeling",
                                                         "error_log_file": "error.out"})
                         fs.task_ = i
@@ -276,8 +317,43 @@ def main():
                             featurization_futures_temp.append(fs)
                         featurization_futures.append(featurization_futures_temp)
 
-                if fit_mode:
-                    print("FITTING jobs submission...", flush=True)
+                if fit_mode and fit_engine == "incremental":
+                    # Incremental R-collecting: one sequential chain per SUBSET (rcut,nmax,lmax).
+                    # foldfit(subset, batch i) folds batch i into the subset's running per-fold
+                    # state (read from disk via prev_state[s]) and emits results for all eweights
+                    # x folds at this checkpoint. The chain edge = prev future threaded per subset;
+                    # subsets run in parallel, dynamically scheduled across the GPU fit workers.
+                    print("FITTING jobs submission (incremental R-collecting)...", flush=True)
+                    eweight_range = create_eweight_range(config['EWEIGHT']["middle_eweight"],
+                                                         config['EWEIGHT']["num_eweights"])
+                    n_subsets = len(hyperparameters_list_noeweight)
+                    prev_state = [None]*n_subsets
+                    state_root = start_path + "fits/_state"
+                    os.makedirs(state_root, exist_ok=True)
+                    for i, b_future in enumerate(b_futures[1:]):
+                        fitting_futures_temp = []
+                        for s in range(n_subsets):
+                            subset_hp = hyperparameters_list_noeweight[s]
+                            rcut_idx = rcuts_list.index(subset_hp[0])
+                            state_dir = f"{state_root}/subset_{s}"
+                            fit_dir_base = f"{start_path}fits/{i}/"
+                            os.makedirs(fit_dir_base, exist_ok=True)
+                            # block-allocated fitting_exe: no per-submit resource_dict; foldfit
+                            # chdir-free (writes by absolute path). b_future is a dependency barrier
+                            # (ensures features/{i}/b_batch.csv exists); prev_state[s] is the chain.
+                            fs = fitting_exe.submit(foldfit, f"{start_path}features/",
+                                            featurization_futures[i][rcut_idx], b_future, subset_hp,
+                                            eweight_range, mlip, i, prev_state[s], n_fold=n_fold,
+                                            fit_dir_base=fit_dir_base, state_dir=state_dir,
+                                            fit_device=fit_device, fit_method=fit_method)
+                            fs.task_ = (i,s)
+                            prev_state[s] = fs
+                            fitting_futures_temp.append(fs)
+                        fitting_futures.append(fitting_futures_temp)
+
+                if fit_mode and fit_engine != "incremental":
+                    # Row-based reference/fallback (O(N^2) cumulative reload; fixed alignment + new CV).
+                    print("FITTING jobs submission (row-based)...", flush=True)
                     for i, b_future in enumerate(b_futures[1:]):
                         fitting_futures_temp = []
                         for j in fits:
@@ -288,7 +364,7 @@ def main():
                             # fitting_exe is block-allocated (fixed cwd/resources): no per-submit
                             # resource_dict; fit() chdir's to fit_directory itself (like uma()).
                             fs = fitting_exe.submit(fit, f"{start_path}features/", featurization_futures[i][rcut_idx], b_future,
-                                            hyperparameters_list[j], mlip, batch_ID=i,
+                                            hyperparameters_list[j], mlip, batch_ID=i, n_fold=n_fold,
                                             fit_directory=fit_directory, fit_device=fit_device, fit_method=fit_method)
                             fs.task_ = (i,j)
                             fitting_futures_temp.append(fs)
@@ -297,6 +373,9 @@ def main():
                 if pareto_mode:
                     print("COST jobs submission...", flush=True)
                     atoms4cost = batched_labeling_futures[0]
+                    cost_nstructures = 100   # cost is only a featurization-timing probe -> use a small
+                                             # slice of batch 0, not all ~batch_size configs (which made
+                                             # each of the 1-per-subset cost tasks ~6.5 min and starved combine_b)
                     for i in costs:
                         hyperparams = hyperparameters_list_noeweight[i]
                         rcuts = hyperparams[0]
@@ -305,8 +384,10 @@ def main():
                         os.makedirs(costs_directory, exist_ok=True)
                         fs = exe.submit(featurize, atoms4cost, config, fitsnap_config, rcuts, costs_directory,
                                         only_cost=True, hyperparameters_noeweight=hyperparams,
+                                        cost_nstructures=cost_nstructures,
                                         resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                                                        "cwd": costs_directory, "error_log_file": "error.out"})
+                                                        "cwd": costs_directory, "error_log_file": "error.out",
+                                                        "priority": 8})
                         fs.task_ = i
                         cost_futures.append(fs)
 
@@ -314,7 +395,8 @@ def main():
                     for i, fitting_futures_per_b in enumerate(fitting_futures):
                         fs = exe.submit(pareto, start_path, i, fitting_futures_per_b, cost_futures, mlip,
                                         resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,
-                                                    "cwd":start_path+"pareto-front", "error_log_file":"error.out"})
+                                                    "cwd":start_path+"pareto-front", "error_log_file":"error.out",
+                                                    "priority": 8})
                         fs.task_ = i
                         pareto_futures.append(fs)
 
@@ -326,7 +408,7 @@ def main():
                         pops_directory += hyperparameters_to_string(mlip, hyperparameters_list[i], delimiter='_')
                         os.makedirs(pops_directory, exist_ok=True)
                         fs = exe.submit(pops, start_path+"features/", featurization_futures[-1][rcut_idx], b_futures[-1],
-                                        hyperparameters_list[i], mlip, batch_ID=len(b_futures)-2,
+                                        hyperparameters_list[i], mlip, batch_ID=len(b_futures)-2, n_fold=n_fold,
                                         resource_dict={"cores": 1, "threads_per_core": ncores_per_fit,
                                                     "gpus_per_core": 0, "num_nodes": 1, "cwd": pops_directory,
                                                     "error_log_file":"error.out"})
@@ -385,6 +467,12 @@ def main():
                             labeling_exe.shutdown(wait=False)
                             labeling_exe_shutdown = True
                             print("LABELING EXECUTOR SHUT DOWN - resources freed", flush=True)
+                            # Take over the just-freed labeling GPUs for fitting (PR #589: dynamic
+                            # max_workers on block-allocated executors). Roughly halves the fit tail.
+                            if fit_mode:
+                                fitting_exe.max_workers = n_fit_workers + n_label_workers
+                                print(f"FITTING expanded to {n_fit_workers + n_label_workers} workers "
+                                      f"(claimed labeling GPUs)", flush=True)
 
                     if fit_mode:
                         fitting_futures = check_and_print_status(fitting_futures, "FITTING", len(fits), list_of_lists=True)

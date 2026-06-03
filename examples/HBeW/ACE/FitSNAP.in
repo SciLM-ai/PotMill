@@ -39,7 +39,7 @@ detailed_errors = 1
 [REFERENCE]
 units = metal
 atom_style = atomic
-pair_style = zero 5.5
+pair_style = zero 6.6
 pair_coeff = * *
 
 [MEMORY]

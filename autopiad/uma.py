@@ -1,13 +1,21 @@
 import numpy as np
 import os
+import time as _time
 from ase import Atoms
 from ase.io import read, write
+
+_UMA_FIRST_CALL_DONE = False
+_UMA_INIT_DONE_TS = None
 
 
 def init_uma_calculator():
     """executorlib init_function: pre-load UMA calculator once per GPU worker."""
+    global _UMA_INIT_DONE_TS
+    _t0 = _time.time()
     from fairchem.core import FAIRChemCalculator
     calc = FAIRChemCalculator.from_model_checkpoint("uma-m-1p1", task_name="omat", device="cuda")
+    _UMA_INIT_DONE_TS = _time.time()
+    print(f"HANDOFF_TIMING: init_uma_calculator DONE pid={os.getpid()} wall_clock={_UMA_INIT_DONE_TS:.3f} init_secs={_UMA_INIT_DONE_TS-_t0:.3f}", flush=True)
     return {"calc": calc}
 
 
@@ -19,6 +27,12 @@ def init_uma_predictor():
 
 
 def uma(start_path, input_file, job_id, first_index, dirpath, calc):
+    global _UMA_FIRST_CALL_DONE
+    if not _UMA_FIRST_CALL_DONE:
+        _UMA_FIRST_CALL_DONE = True
+        _now = _time.time()
+        _idle = (_now - _UMA_INIT_DONE_TS) if _UMA_INIT_DONE_TS else -1
+        print(f"HANDOFF_TIMING: first uma() call pid={os.getpid()} wall_clock={_now:.3f} idle_since_init={_idle:.3f}s job_id={job_id}", flush=True)
 
     os.chdir(dirpath)
 
