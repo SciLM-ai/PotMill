@@ -4,7 +4,7 @@ from autopiad.tools import hyperparameters_to_string, create_eweight_range
 from autopiad.tools import combined_ace_hyperparameters, combined_snap_hyperparameters, parse_inputfile, configparse
 from autopiad.featurize import featurize, init_featurize
 from autopiad.vasp import vasp
-from autopiad.uma import uma, init_uma_calculator
+from autopiad.uma import uma, uma_batch, init_uma_calculator, init_uma_predictor
 from autopiad.lammps import lammps
 from autopiad.fake_vasp import fake_vasp
 from autopiad.fit import fit, foldfit, init_fit
@@ -23,24 +23,34 @@ def _count_running(futures, list_of_lists=False):
     return sum(1 for f in futures if f.running())
 
 
-def check_and_print_status(futures, name, total, list_of_lists=False):
+def check_and_print_status(futures, name, total, list_of_lists=False, count_multiplier=1):
+    """Print stage progress. count_multiplier > 1 = one future represents N items (e.g.
+    labeling batched at label_batch_size=10 -- each future = 10 configs, so the printed
+    REMAINING/FINISHED stay in config units while total is in config units too)."""
     if list_of_lists:
         for i in range(len(futures)):
             if len(futures[i]) != 0:
                 done, futures[i] = concurrent.futures.wait(futures[i], timeout=1)
                 if len(done)!=0:
-                    print(f"{len(futures[i])} {name}S REMAINING  --- {total-len(futures[i])} {name}S FINISHED  "
+                    remaining = len(futures[i]) * count_multiplier
+                    print(f"{remaining} {name}S REMAINING  --- {total-remaining} {name}S FINISHED  "
                           f"--- {total} {name}S TOTAL", flush=True)
                 break
     else:
         done, futures = concurrent.futures.wait(futures, timeout=1)
         if len(done)!=0:
-            print(f"{len(futures)} {name}S REMAINING  --- {total-len(futures)} {name}S FINISHED  --- "
+            remaining = len(futures) * count_multiplier
+            print(f"{remaining} {name}S REMAINING  --- {total-remaining} {name}S FINISHED  --- "
                   f"{total} {name}S TOTAL", flush=True)
     return futures
 
 
 def combine_b(start_path, labeling_results, labeling_IDs_ready_for_fit, batch_idx):
+    # If labeling was batched (label_batch_size>1), each labeling_results item is a LIST
+    # of dicts (one uma_batch call → N configs). Flatten so the existing per-config
+    # iteration below is unchanged.
+    if labeling_results and isinstance(labeling_results[0], list):
+        labeling_results = [item for sublist in labeling_results for item in sublist]
     labeling_IDs_finished = [labeling_result["job_ID"] for labeling_result in labeling_results]
     print("Starting b.csv file preparation for the fit...", flush=True)
     new_b_files = " ".join([f"{job_id}/b" for job_id in labeling_IDs_finished])
@@ -96,13 +106,18 @@ def make_init_atoms_from_entropy(structuregen_config):
 _NEXT_ATOMS_FIRST_CALL_DONE = False
 
 
-def next_atoms_from_entropy(entropy_iterator):
+def next_atoms_from_entropy(entropy_iterator, job_id=None):
+    """Yield the next entropy-generated config. When job_id is given (label_batch_size>1 path)
+    returns a tagged dict so uma_batch can recover the submission index after exe.batched groups
+    results by completion (which loses original ordering)."""
     global _NEXT_ATOMS_FIRST_CALL_DONE
     result = next(entropy_iterator)
     if not _NEXT_ATOMS_FIRST_CALL_DONE:
         _NEXT_ATOMS_FIRST_CALL_DONE = True
         import time as _time, os as _os
         print(f"HANDOFF_TIMING: first entropy yield pid={_os.getpid()} wall_clock={_time.time():.3f}", flush=True)
+    if job_id is not None:
+        return {"atoms": result, "job_id": job_id}
     return result
 
 
@@ -150,13 +165,24 @@ def main():
     fit_method = config["MAIN"].get("fit_method", "svd")
     n_fold = config["MAIN"].get("n_fold", 3)            # k for k-fold CV (test = 1/n_fold)
     fit_engine = config["MAIN"].get("fit_engine", "incremental")  # 'incremental' (R-collecting) | 'rows'
+    # label_batch_size: configs per GPU forward pass. 1 = per-config uma() with ASE calculator
+    # (default, no behavioral change). >1 = uma_batch() with the get_predict_unit predictor;
+    # amortizes UMA's ~160 ms fixed forward overhead across N configs, so 1 lab GPU/node
+    # can keep up with entropy. Must divide batch_size evenly (we don't split a combine_b batch).
+    label_batch_size = config["MAIN"].get("label_batch_size", 1)
     assert 0 < fit_gpus_per_node < gpus_per_node, \
         f"fit_gpus_per_node ({fit_gpus_per_node}) must be >0 and leave GPUs for labeling " \
         f"(gpus_per_node={gpus_per_node})"
+    assert label_batch_size >= 1, f"label_batch_size must be >=1, got {label_batch_size}"
+    if label_batch_size > 1:
+        assert config["MAIN"]["batch_size"] % label_batch_size == 0, \
+            f"batch_size ({config['MAIN']['batch_size']}) must be a multiple of " \
+            f"label_batch_size ({label_batch_size}) so combine_b sees whole batches"
     n_fit_workers = fit_gpus_per_node * nnodes
     n_label_workers = (gpus_per_node - fit_gpus_per_node) * nnodes
     print(f"GPU split: {n_label_workers} labeling + {n_fit_workers} fitting workers "
-          f"({gpus_per_node}/node total) | fit_device={fit_device} fit_method={fit_method}", flush=True)
+          f"({gpus_per_node}/node total) | fit_device={fit_device} fit_method={fit_method} "
+          f"| label_batch_size={label_batch_size}", flush=True)
     structuregen_config = config.get("STRUCTUREGEN", {})
     if "elements" not in structuregen_config:
         # Fall back to chem_elem from FitSNAP section for backwards compatibility
@@ -251,8 +277,11 @@ def main():
                            resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1, "threads_per_core": threads_per_worker,
                                           "cwd": start_path+"entropy", "error_log_file":"error.out"}) as entropy_exe:
         
+        # label_batch_size>1 uses the get_predict_unit predictor (batched .predict path); =1
+        # keeps the per-config ASE calculator (default, byte-identical to prior behavior).
+        _label_init = init_uma_predictor if label_batch_size > 1 else init_uma_calculator
         with FluxJobExecutor(flux_log_files=True, max_workers=n_label_workers, flux_executor=flux_executor,
-                             block_allocation=True, init_function=init_uma_calculator, restart_limit=3,
+                             block_allocation=True, init_function=_label_init, restart_limit=3,
                              resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1,
                                             "cwd": start_path+"labeling", "error_log_file": "error.out"}) as labeling_exe:
 
@@ -277,25 +306,49 @@ def main():
                 if entropy_mode:
                     print("Entropy jobs submission...", flush=True)
                     for i in range(nconfigurations):
-                        fs = entropy_exe.submit(next_atoms_from_entropy)
+                        # When batching labels, tag the entropy result with its submission index
+                        # so uma_batch can recover the job_id after exe.batched (completion-ordered)
+                        # collapses futures into a list.
+                        if label_batch_size > 1:
+                            fs = entropy_exe.submit(next_atoms_from_entropy, job_id=i)
+                        else:
+                            fs = entropy_exe.submit(next_atoms_from_entropy)
                         fs.task_ = i
                         entropy_atoms_futures.append(fs)
 
                 if labeling_mode:
-                    print("LABELING jobs submission...", flush=True)
-                    for i, entropy_atoms in enumerate(entropy_atoms_futures):
-                        labeling_directory = f"{start_path}labeling/{i}/"
-                        os.makedirs(labeling_directory, exist_ok=True)
-                        fs = labeling_exe.submit(uma, start_path, entropy_atoms, i, 0, labeling_directory)
-                        fs.task_ = i
-                        labeling_futures.append(fs)
+                    print(f"LABELING jobs submission (label_batch_size={label_batch_size})...", flush=True)
+                    if label_batch_size == 1:
+                        # Per-config path: one uma() submit per entropy future (unchanged).
+                        for i, entropy_atoms in enumerate(entropy_atoms_futures):
+                            labeling_directory = f"{start_path}labeling/{i}/"
+                            os.makedirs(labeling_directory, exist_ok=True)
+                            fs = labeling_exe.submit(uma, start_path, entropy_atoms, i, 0, labeling_directory)
+                            fs.task_ = i
+                            labeling_futures.append(fs)
+                    else:
+                        # Batched path: group entropy futures into batches of label_batch_size
+                        # (by completion -- exe.batched fires as soon as N entropy results are
+                        # ready, so labeling overlaps with entropy). Each batch is one GPU
+                        # forward pass via uma_batch, amortizing the ~160 ms fixed overhead.
+                        # Pass 4 positional args; executorlib injects `predictor` as a kwarg
+                        # from init_uma_predictor's return dict (same pattern as uma+calc).
+                        batched_entropy_futures = exe.batched(entropy_atoms_futures, n=label_batch_size)
+                        for i, bef in enumerate(batched_entropy_futures):
+                            fs = labeling_exe.submit(uma_batch, start_path, bef, None,
+                                                     f"{start_path}labeling")
+                            fs.task_ = i
+                            labeling_futures.append(fs)
 
                     # exe.batched batches by COMPLETION order (first n done), so featurize/combine_b start
                     # on the first batch_size that FINISH -- a straggler in a fixed index-chunk would idle
                     # the rest, which is exactly what this avoids. (The O(100k)-per-collector ingestion
                     # stall that made this unusable at 100k is fixed in executorlib's dependency scheduler:
                     # batched tasks now track only their skip_lst, not the full labeling-futures list.)
-                    batched_labeling_futures = exe.batched(labeling_futures, n=batch_size)
+                    # For the batched-labeling path, each labeling future already holds label_batch_size
+                    # results -- so we batch combine_b by batch_size/label_batch_size futures (each is a list).
+                    combine_b_n = batch_size if label_batch_size == 1 else batch_size // label_batch_size
+                    batched_labeling_futures = exe.batched(labeling_futures, n=combine_b_n)
                     for i, batched_labeling_future in enumerate(batched_labeling_futures):
                         fs = exe.submit(combine_b, start_path, batched_labeling_future, b_futures[-1], i,
                                         resource_dict={"cores": 1, "cwd": start_path+"labeling",
@@ -461,7 +514,12 @@ def main():
                             print("FEATURIZE EXECUTOR SHUT DOWN - resources freed", flush=True)
 
                     if labeling_mode:
-                        labeling_futures = check_and_print_status(labeling_futures, "LABELING", nconfigurations)
+                        # When batched, each labeling future is one uma_batch task covering
+                        # label_batch_size configs -- pass that as count_multiplier so the
+                        # printed REMAINING/FINISHED are in CONFIG units (matches total).
+                        labeling_futures = check_and_print_status(labeling_futures, "LABELING",
+                                                                  nconfigurations,
+                                                                  count_multiplier=label_batch_size)
                         b_futures = check_and_print_status(b_futures, "B_COLLECTING", num_b_futures)
                         if not labeling_exe_shutdown and len(labeling_futures) == 0:
                             labeling_exe.shutdown(wait=False)
