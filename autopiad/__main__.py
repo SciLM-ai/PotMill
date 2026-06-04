@@ -327,15 +327,20 @@ def main():
                             fs.task_ = i
                             labeling_futures.append(fs)
                     else:
-                        # Batched path: group entropy futures into batches of label_batch_size
-                        # (by completion -- exe.batched fires as soon as N entropy results are
-                        # ready, so labeling overlaps with entropy). Each batch is one GPU
-                        # forward pass via uma_batch, amortizing the ~160 ms fixed overhead.
-                        # Pass 4 positional args; executorlib injects `predictor` as a kwarg
+                        # Batched path: index-order chunks of label_batch_size consecutive entropy
+                        # futures. Each labeling task is submitted with a LIST of L futures as an
+                        # arg -- the dependency scheduler walks args, finds each future, waits for
+                        # all L to resolve, then `update_futures_in_input` materializes the list of
+                        # results. Each task has its OWN small future_lst (L entries) rather than
+                        # the full 100k -- avoids the O(N) per-scheduler-pass per-batched-collector
+                        # cost of `exe.batched(entropy_atoms_futures, n=L)` which is O(N^2) total
+                        # at nconfigurations=100k / L=20 (5000 collectors x 100k entries).
+                        # uma_batch sees a list of {"atoms":..., "job_id":...} dicts and extracts
+                        # both. Pass 4 positional args; executorlib injects `predictor` as a kwarg
                         # from init_uma_predictor's return dict (same pattern as uma+calc).
-                        batched_entropy_futures = exe.batched(entropy_atoms_futures, n=label_batch_size)
-                        for i, bef in enumerate(batched_entropy_futures):
-                            fs = labeling_exe.submit(uma_batch, start_path, bef, None,
+                        for i, batch_start in enumerate(range(0, nconfigurations, label_batch_size)):
+                            batch_futs = entropy_atoms_futures[batch_start:batch_start+label_batch_size]
+                            fs = labeling_exe.submit(uma_batch, start_path, batch_futs, None,
                                                      f"{start_path}labeling")
                             fs.task_ = i
                             labeling_futures.append(fs)
