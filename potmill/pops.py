@@ -3,44 +3,31 @@ def pops(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamet
         mlip, batch_ID=None, train_fraction = 0.7, n_fold = 3):
 
     import numpy as np
-    import pandas as pd
     from POPSRegression import POPSRegression
     from potmill.tools import rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
-    from potmill.fit import config_fold
+    from potmill.fit import config_fold, _feature_indices
+    from potmill.bfile import read_b
 
-    if isinstance(feature_names[0][0],list): feature_names = feature_names[0]
-    
     if mlip == "ACE":
         rcuts, nmaxes, lmaxes, eweight = hyperparameters
-        nindcs_to_bodyorder = {5:2, 8:3, 12:4, 16:5, 20:6, 24:7}
-        feature_indices = []
-        for i, lst in enumerate(feature_names):
-            if len(lst)==1:
-                feature_indices.append(i)
-            else:
-                nu = nindcs_to_bodyorder[len(lst)]
-                if all(lst[nu+1+k]<=nmaxes[nu-2] and lst[2*nu+k]<=lmaxes[nu-2] for k in range(nu-1)):
-                    feature_indices.append(i)
+        hp_noeweight = [rcuts, nmaxes, lmaxes]
     elif mlip == "SNAP":
         rcuts, twojmaxes, eweight = hyperparameters
-        feature_indices = [i for i, lst in enumerate(feature_names) if len(lst)==1 or all(value <= twojmaxes[0] for value in lst[1:])]
-    
-    print(len(feature_indices), len(feature_names), flush=True)
+        hp_noeweight = [rcuts, twojmaxes]
+    feature_indices = _feature_indices(mlip, feature_names, hp_noeweight)
+
     b_size = len(vasp_IDs_ready_for_fit)
-    # NO sort_index: rows stay in raw (config-major) order, aligned with a.npy.
-    b_vect = pd.read_csv(f"{features_directory}b{b_size}.csv", header=None)
-    a_matr = []
+    local_idx, job_id_col, b_values = read_b(f"{features_directory}b{b_size}.csv")
+    is_energy = (local_idx == 0)                             # energy row = local index 0 per config
+    rcuts_str = rcuts_to_string(rcuts, delimiter='_')
     if batch_ID is None:
-        a_matr_map = np.load(f"{features_directory}{rcuts_to_string(rcuts,delimiter='_')}/a.npy", mmap_mode='r')
-        a_matr = np.ascontiguousarray(a_matr_map[:,feature_indices])
+        a_matr_map = np.load(f"{features_directory}{rcuts_str}/a.npy", mmap_mode='r')
+        a_matr = np.ascontiguousarray(a_matr_map[:, feature_indices])
     else:
-        for id in range(batch_ID+1):
-            a_matr_map = np.load(f"{features_directory}{id}/{rcuts_to_string(rcuts,delimiter='_')}/a.npy", mmap_mode='r')
-            a_matr.append(a_matr_map[:,feature_indices])
-        a_matr = np.concatenate(a_matr)
-    job_id_col = b_vect[1].values
-    is_energy = (b_vect[0].values == 0)                      # energy row = local index 0 per config
-    assert a_matr.shape[0] == b_vect.shape[0], (a_matr.shape[0], b_vect.shape[0])
+        parts = [np.load(f"{features_directory}{bid}/{rcuts_str}/a.npy", mmap_mode='r')[:, feature_indices]
+                 for bid in range(batch_ID+1)]
+        a_matr = np.concatenate(parts)
+    assert a_matr.shape[0] == len(b_values), (a_matr.shape[0], len(b_values))
     # fixed config->fold partition (per row), proper k-fold (test = 1/n_fold)
     fold_of_job = {int(j): config_fold(j, n_fold) for j in np.unique(job_id_col)}
     part = np.array([fold_of_job[int(j)] for j in job_id_col])
@@ -60,8 +47,8 @@ def pops(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamet
 
         a_train = a_matr[train_index]
         a_test = a_matr[test_index]
-        b_train = b_vect[2].values[train_index]
-        b_test = b_vect[2].values[test_index]
+        b_train = b_values[train_index]
+        b_test = b_values[test_index]
 
         energy_selector_train = is_energy[train_index]
         energy_selector_test = is_energy[test_index]

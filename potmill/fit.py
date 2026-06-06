@@ -89,8 +89,9 @@ def fit(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamete
 
     import os
     import numpy as np
-    import pandas as pd
+    import torch
     from potmill.tools import rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
+    from potmill.bfile import read_b
 
     # Block-allocated fitting workers have a fixed CWD; chdir to this fit's directory so
     # results.csv and the beta files land in the right per-fit folder (mirrors uma()).
@@ -104,37 +105,27 @@ def fit(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamete
         rcuts, twojmaxes, eweight = hyperparameters
         hp_noeweight = [rcuts, twojmaxes]
     feature_indices = _feature_indices(mlip, feature_names, hp_noeweight)
-
-    print(len(feature_indices), len(feature_names if not isinstance(feature_names[0][0], list)
-          else feature_names[0]), flush=True)
-    b_size = len(vasp_IDs_ready_for_fit)
-    # NO sort_index: rows stay in raw (config-major) order, aligned with a.npy.
-    b_vect = pd.read_csv(f"{features_directory}b{b_size}.csv", header=None)
     rcuts_str = rcuts_to_string(rcuts, delimiter='_')
 
-    use_gpu = (fit_method != "numpy")
-    if use_gpu:
-        import torch
+    # targets (cumulative b file), raw config-major order aligned with a.npy (no sort_index)
+    b_size = len(vasp_IDs_ready_for_fit)
+    local_idx, job_id_col, b_values = read_b(f"{features_directory}b{b_size}.csv")
+    is_energy = (local_idx == 0)                             # energy row = local index 0 per config
 
-    # ---- Load the (cumulative) design matrix, column-selected, config-major (aligned with b) ----
+    # ---- cumulative design matrix, column-selected, config-major, on fit_device ----
     if batch_ID is None:
         a_map = np.load(f"{features_directory}{rcuts_str}/a.npy", mmap_mode='r')
-        a_sel = np.ascontiguousarray(a_map[:, feature_indices])
-        a_matr = torch.as_tensor(a_sel, dtype=torch.float64, device=fit_device) if use_gpu else a_sel
+        a_matr = torch.as_tensor(np.ascontiguousarray(a_map[:, feature_indices]),
+                                 dtype=torch.float64, device=fit_device)
     else:
         parts = []
         for bid in range(batch_ID+1):
             a_map = np.load(f"{features_directory}{bid}/{rcuts_str}/a.npy", mmap_mode='r')
-            sub = np.ascontiguousarray(a_map[:, feature_indices])
-            parts.append(torch.from_numpy(sub).to(device=fit_device, dtype=torch.float64) if use_gpu else sub)
-        a_matr = torch.cat(parts) if use_gpu else np.concatenate(parts)
+            parts.append(torch.from_numpy(np.ascontiguousarray(a_map[:, feature_indices])))
+        a_matr = torch.cat(parts).to(device=fit_device, dtype=torch.float64)
 
-    job_id_col = b_vect[1].values
-    b_values = b_vect[2].values                              # 1-D numpy (tiny)
-    is_energy = (b_vect[0].values == 0)                      # energy row = local index 0 per config
     assert a_matr.shape[0] == len(b_values), (a_matr.shape[0], len(b_values))
-    if use_gpu:
-        b_all_t = torch.as_tensor(b_values, dtype=torch.float64, device=fit_device)
+    b_all_t = torch.as_tensor(b_values, dtype=torch.float64, device=fit_device)
 
     # fixed config->fold partition (per row)
     fold_of_job = {int(j): config_fold(j, n_fold) for j in np.unique(job_id_col)}
@@ -146,106 +137,55 @@ def fit(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamete
         if mlip == "ACE":
             print("Hyperparameters rcut, nmax, lmax and eweight are " + rcuts_to_string(rcuts) + ", " +
                 nmaxes_to_string(nmaxes) + ", " + lmaxes_to_string(lmaxes) + " and %.3f" % eweight, flush=True)
-        if mlip == "SNAP":
+        else:
             print("Hyperparameters rcut, 2Jmax and eweight are " + rcuts_to_string(rcuts) + ", " +
                 twojmaxes_to_string(twojmaxes) + " and %.3f" % eweight, flush=True)
 
         # ---- k-fold split BY CONFIG: test = partition==fold (1/n_fold), train = the rest ----
-        train_index = np.where(part != fold)[0]
-        test_index = np.where(part == fold)[0]
-        energy_selector_train = is_energy[train_index]
-        energy_selector_test  = is_energy[test_index]
-        force_selector_train  = ~energy_selector_train
-        force_selector_test   = ~energy_selector_test
+        ti = torch.as_tensor(np.where(part != fold)[0], dtype=torch.long, device=fit_device)
+        tj = torch.as_tensor(np.where(part == fold)[0], dtype=torch.long, device=fit_device)
+        e_tr = torch.as_tensor(is_energy[ti.cpu().numpy()], dtype=torch.bool, device=fit_device)
+        e_te = torch.as_tensor(is_energy[tj.cpu().numpy()], dtype=torch.bool, device=fit_device)
+        f_tr = ~e_tr
+        f_te = ~e_te
+        a_train = a_matr[ti]; a_test = a_matr[tj]
+        b_train = b_all_t[ti]; b_test = b_all_t[tj]
 
-        if not use_gpu:
-            # -------------------- original all-CPU (numpy) path --------------------
-            a_train = a_matr[train_index]; a_test = a_matr[test_index]
-            b_train = b_values[train_index]; b_test = b_values[test_index]
+        eweights_train = torch.exp(-b_train[e_tr]/5)
+        eweights_train = eweights_train/eweights_train.sum()*eweight
+        fweights_train = 1./torch.clamp(torch.abs(b_train[f_tr]), min=3.)
+        fweights_train = fweights_train/fweights_train.sum()
+        eweights_test = torch.exp(-b_test[e_te]/5)
+        eweights_test = eweights_test/eweights_test.sum()
+        fweights_test = 1./torch.clamp(torch.abs(b_test[f_te]), min=3.)
+        fweights_test = fweights_test/fweights_test.sum()
 
-            eweights_train = np.exp(-b_train[energy_selector_train]/5)
-            eweights_train /= np.sum(eweights_train); eweights_train *= eweight
-            fweights_train = 1./np.maximum(3., np.fabs(b_train[force_selector_train]))
-            fweights_train /= np.sum(fweights_train); fweights_train *= 1.
-            eweights_test = np.exp(-b_test[energy_selector_test]/5)
-            eweights_test /= np.sum(eweights_test); eweights_test *= 1.
-            fweights_test = 1./np.maximum(3., np.fabs(b_test[force_selector_test]))
-            fweights_test /= np.sum(fweights_test); fweights_test *= 1.
+        a_stack = torch.cat([eweights_train.unsqueeze(1)*a_train[e_tr], fweights_train.unsqueeze(1)*a_train[f_tr]])
+        b_stack = torch.cat([eweights_train*b_train[e_tr], fweights_train*b_train[f_tr]])
 
-            a_e_train_w = np.multiply(eweights_train[:, None], a_train[energy_selector_train])
-            a_f_train_w = np.multiply(fweights_train[:, None], a_train[force_selector_train])
-            b_e_train_w = np.multiply(eweights_train, b_train[energy_selector_train])
-            b_f_train_w = np.multiply(fweights_train, b_train[force_selector_train])
-            a_stack = np.concatenate([a_e_train_w, a_f_train_w])
-            b_stack = np.concatenate([b_e_train_w, b_f_train_w])
-            print(a_stack.shape, b_stack.shape, flush=True)
+        beta_t = _gpu_solve(a_stack, b_stack.reshape(-1, 1), fit_method, fit_device, rcond)
+        if not torch.all(torch.isfinite(beta_t)):
+            print(f"WARNING: non-finite beta from '{fit_method}' solve (rank-deficient "
+                  f"design?) for hyperparameters {hyperparameters}", flush=True)
 
-            beta, *_ = np.linalg.lstsq(a_stack, b_stack, rcond)
-
-            train_residual = np.square(np.dot(a_train, beta) - b_train)
-            test_residual  = np.square(np.dot(a_test, beta) - b_test)
-            train_e_rmse = float(np.sqrt(np.mean(train_residual[energy_selector_train])))
-            train_f_rmse = float(np.sqrt(np.mean(train_residual[force_selector_train])))
-            train_e_rmse_weighted = float(np.sqrt(np.sum(np.multiply(eweights_train, train_residual[energy_selector_train]))))
-            train_f_rmse_weighted = float(np.sqrt(np.sum(np.multiply(fweights_train, train_residual[force_selector_train]))))
-            test_e_rmse = float(np.sqrt(np.mean(test_residual[energy_selector_test])))
-            test_f_rmse = float(np.sqrt(np.mean(test_residual[force_selector_test])))
-            test_e_rmse_weighted = float(np.sqrt(np.sum(np.multiply(eweights_test, test_residual[energy_selector_test]))))
-            test_f_rmse_weighted = float(np.sqrt(np.sum(np.multiply(fweights_test, test_residual[force_selector_test]))))
-        else:
-            # -------------------- GPU path: everything in torch on fit_device --------------------
-            ti = torch.as_tensor(train_index, dtype=torch.long, device=fit_device)
-            tj = torch.as_tensor(test_index,  dtype=torch.long, device=fit_device)
-            e_tr = torch.as_tensor(energy_selector_train, dtype=torch.bool, device=fit_device)
-            e_te = torch.as_tensor(energy_selector_test,  dtype=torch.bool, device=fit_device)
-            f_tr = torch.as_tensor(force_selector_train,  dtype=torch.bool, device=fit_device)
-            f_te = torch.as_tensor(force_selector_test,   dtype=torch.bool, device=fit_device)
-            a_train = a_matr[ti]; a_test = a_matr[tj]
-            b_train = b_all_t[ti]; b_test = b_all_t[tj]
-
-            eweights_train = torch.exp(-b_train[e_tr]/5)
-            eweights_train = eweights_train/eweights_train.sum()*eweight
-            fweights_train = 1./torch.clamp(torch.abs(b_train[f_tr]), min=3.)
-            fweights_train = fweights_train/fweights_train.sum()
-            eweights_test = torch.exp(-b_test[e_te]/5)
-            eweights_test = eweights_test/eweights_test.sum()
-            fweights_test = 1./torch.clamp(torch.abs(b_test[f_te]), min=3.)
-            fweights_test = fweights_test/fweights_test.sum()
-
-            a_e_train_w = eweights_train.unsqueeze(1)*a_train[e_tr]
-            a_f_train_w = fweights_train.unsqueeze(1)*a_train[f_tr]
-            b_e_train_w = eweights_train*b_train[e_tr]
-            b_f_train_w = fweights_train*b_train[f_tr]
-            a_stack = torch.cat([a_e_train_w, a_f_train_w])
-            b_stack = torch.cat([b_e_train_w, b_f_train_w])
-            print(tuple(a_stack.shape), tuple(b_stack.shape), flush=True)
-
-            beta_t = _gpu_solve(a_stack, b_stack.reshape(-1, 1), fit_method, fit_device, rcond)
-            if not torch.all(torch.isfinite(beta_t)):
-                print(f"WARNING: non-finite beta from '{fit_method}' solve (rank-deficient "
-                      f"design?) for hyperparameters {hyperparameters}", flush=True)
-
-            train_residual = torch.square(a_train @ beta_t - b_train)
-            test_residual  = torch.square(a_test  @ beta_t - b_test)
-            train_e_rmse = torch.sqrt(torch.mean(train_residual[e_tr])).item()
-            train_f_rmse = torch.sqrt(torch.mean(train_residual[f_tr])).item()
-            train_e_rmse_weighted = torch.sqrt(torch.sum(eweights_train*train_residual[e_tr])).item()
-            train_f_rmse_weighted = torch.sqrt(torch.sum(fweights_train*train_residual[f_tr])).item()
-            test_e_rmse = torch.sqrt(torch.mean(test_residual[e_te])).item()
-            test_f_rmse = torch.sqrt(torch.mean(test_residual[f_te])).item()
-            test_e_rmse_weighted = torch.sqrt(torch.sum(eweights_test*test_residual[e_te])).item()
-            test_f_rmse_weighted = torch.sqrt(torch.sum(fweights_test*test_residual[f_te])).item()
-            beta = beta_t.detach().cpu().numpy()       # only the (p,) coeffs come back to CPU
-
-        print("Energy training RMSE is", train_e_rmse, flush=True)
-        print("Force training RMSE is", train_f_rmse, flush=True)
-        print("Energy testing RMSE is", test_e_rmse, flush=True)
-        print("Force testing RMSE is", test_f_rmse, flush=True)
-
-        _write_results(".", mlip, hyperparameters, fold, dict(
-            tr_E=train_e_rmse, tr_F=train_f_rmse, te_E=test_e_rmse, te_F=test_f_rmse,
-            tr_E_w=train_e_rmse_weighted, tr_F_w=train_f_rmse_weighted,
-            te_E_w=test_e_rmse_weighted, te_F_w=test_f_rmse_weighted, beta=beta))
+        train_residual = torch.square(a_train @ beta_t - b_train)
+        test_residual  = torch.square(a_test  @ beta_t - b_test)
+        res = dict(
+            tr_E=torch.sqrt(torch.mean(train_residual[e_tr])).item(),
+            tr_F=torch.sqrt(torch.mean(train_residual[f_tr])).item(),
+            te_E=torch.sqrt(torch.mean(test_residual[e_te])).item(),
+            te_F=torch.sqrt(torch.mean(test_residual[f_te])).item(),
+            tr_E_w=torch.sqrt(torch.sum(eweights_train*train_residual[e_tr])).item(),
+            tr_F_w=torch.sqrt(torch.sum(fweights_train*train_residual[f_tr])).item(),
+            te_E_w=torch.sqrt(torch.sum(eweights_test*test_residual[e_te])).item(),
+            te_F_w=torch.sqrt(torch.sum(fweights_test*test_residual[f_te])).item(),
+            beta=beta_t.detach().cpu().numpy(),
+        )
+        print("Energy training RMSE is", res["tr_E"], flush=True)
+        print("Force training RMSE is", res["tr_F"], flush=True)
+        print("Energy testing RMSE is", res["te_E"], flush=True)
+        print("Force testing RMSE is", res["te_F"], flush=True)
+        _write_results(".", mlip, hyperparameters, fold, res)
 
     return hyperparameters
 
