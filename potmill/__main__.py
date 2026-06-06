@@ -4,10 +4,7 @@ from potmill.tools import hyperparameters_to_string, create_eweight_range
 from potmill.tools import combined_ace_hyperparameters, combined_snap_hyperparameters
 from potmill.config import ConfigManager, load_fitsnap_config
 from potmill.featurize import featurize, init_featurize
-from potmill.vasp import vasp
-from potmill.uma import uma, uma_batch, init_uma_calculator, init_uma_predictor
-from potmill.lammps import lammps
-from potmill.fake_vasp import fake_vasp
+from potmill.labeling import make_labeling
 from potmill.fit import fit, foldfit, init_fit
 from potmill.pareto import pareto
 from potmill.pops import pops
@@ -169,6 +166,10 @@ def main():
         assert config["MAIN"]["batch_size"] % label_batch_size == 0, \
             f"batch_size ({config['MAIN']['batch_size']}) must be a multiple of " \
             f"label_batch_size ({label_batch_size}) so combine_b sees whole batches"
+    labeling = make_labeling(config)
+    if label_batch_size > 1 and labeling.batched is None:
+        raise ValueError(f"[ourLabeling] calculator={config.get_value('ourLabeling', 'calculator')} "
+                         f"has no batched path; set label_batch_size = 1")
     n_fit_workers = fit_gpus_per_node * nnodes
     n_label_workers = (gpus_per_node - fit_gpus_per_node) * nnodes
     print(f"GPU split: {n_label_workers} labeling + {n_fit_workers} fitting workers "
@@ -252,11 +253,8 @@ def main():
                            resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1, "threads_per_core": threads_per_worker,
                                           "cwd": start_path+"entropy", "error_log_file":"error.out"}) as entropy_exe:
         
-        # label_batch_size>1 uses the get_predict_unit predictor (batched .predict path); =1
-        # keeps the per-config ASE calculator (default, byte-identical to prior behavior).
-        _label_init = init_uma_predictor if label_batch_size > 1 else init_uma_calculator
         with FluxJobExecutor(flux_log_files=True, max_workers=n_label_workers, flux_executor=flux_executor,
-                             block_allocation=True, init_function=_label_init, restart_limit=3,
+                             block_allocation=True, init_function=labeling.init_function, restart_limit=3,
                              resource_dict={"cores": 1, "gpus_per_core": 1, "num_nodes": 1,
                                             "cwd": start_path+"labeling", "error_log_file": "error.out"}) as labeling_exe:
 
@@ -294,11 +292,12 @@ def main():
                 if labeling_mode:
                     print(f"LABELING jobs submission (label_batch_size={label_batch_size})...", flush=True)
                     if label_batch_size == 1:
-                        # Per-config path: one uma() submit per entropy future (unchanged).
+                        # Per-config path: one label task per entropy future. The backend's calc /
+                        # kwargs are injected by executorlib from its init_function.
                         for i, entropy_atoms in enumerate(entropy_atoms_futures):
                             labeling_directory = f"{start_path}labeling/{i}/"
                             os.makedirs(labeling_directory, exist_ok=True)
-                            fs = labeling_exe.submit(uma, start_path, entropy_atoms, i, 0, labeling_directory)
+                            fs = labeling_exe.submit(labeling.per_config, start_path, entropy_atoms, i, labeling_directory)
                             fs.task_ = i
                             labeling_futures.append(fs)
                     else:
@@ -315,7 +314,7 @@ def main():
                         # from init_uma_predictor's return dict (same pattern as uma+calc).
                         for i, batch_start in enumerate(range(0, nconfigurations, label_batch_size)):
                             batch_futs = entropy_atoms_futures[batch_start:batch_start+label_batch_size]
-                            fs = labeling_exe.submit(uma_batch, start_path, batch_futs, None,
+                            fs = labeling_exe.submit(labeling.batched, start_path, batch_futs, None,
                                                      f"{start_path}labeling")
                             fs.task_ = i
                             labeling_futures.append(fs)

@@ -105,6 +105,8 @@ def combined_snap_hyperparameters(config, w_eweight=True):
 
 
 def interpret_string(string):
+    if isinstance(string, str) and string.strip().lower() in ("true", "false"):
+        return string.strip().lower() == "true"
     try:
         return int(string)
     except ValueError:

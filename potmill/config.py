@@ -35,6 +35,7 @@ class ConfigManager:
             "n_fold": 3, "fit_engine": "incremental", "auto_reduce_hyperparameters": 0,
         },
         "FitSNAP": {"mlip": "ACE", "chem_elem": None, "filename": "FitSNAP.in"},
+        "ourLabeling": {"calculator": "FairChemCalculator"},
         "RCUT": {"min_rcut": 5.0, "max_rcut": 6.5, "num_rcut": 4},
         "NMAX": {"min_nmax": 5, "max_nmax": 9},
         "LMAX": {"min_lmax": 0, "max_lmax": 4},
