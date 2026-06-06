@@ -91,16 +91,16 @@ trajs, features). CPU util on CFS was ~5–20% (workers I/O-blocked) vs ~40% on 
 (workers actually computing).
 
 Workflow pattern (implemented in `launch_scratch.sh`):
-1. `$WORK/potmill_runs/` keeps persistent inputs (`inputfile_*`, `FitSNAP.in`, `sbatch_*.sh`,
+1. `$WORK/PotMill_runs/` keeps persistent inputs (`inputfile_*`, `FitSNAP.in`, `sbatch_*.sh`,
    `launch_scratch.sh`) and small post-run results in `<name>_results/`
    (`pipeline_monitor.csv`, `pareto-front/`, log).
-2. `$SCRATCH/potmill_experiments/<run_name>/` is the working directory during execution —
+2. `$SCRATCH/PotMill_experiments/<run_name>/` is the working directory during execution —
    all heavy intermediate files (`entropy/`, `labeling/`, `features/`, `fits/`) live here.
 3. After the job, `launch_scratch.sh` copies the small artifacts back to
-   `$WORK/potmill_runs/<name>_results/`. The heavy scratch dir is left in place for
+   `$WORK/PotMill_runs/<name>_results/`. The heavy scratch dir is left in place for
    analysis (or eventual scratch purge).
 
-Do **not** put run output dirs under `$WORK/potmill_runs/<name>` directly anymore — use
+Do **not** put run output dirs under `$WORK/PotMill_runs/<name>` directly anymore — use
 `launch_scratch.sh`.
 
 ## Configuration

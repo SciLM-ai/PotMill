@@ -5,7 +5,7 @@
 #
 # Per the main CLAUDE.md "Run directory placement", submit from $SCRATCH (Lustre
 # is ~1.7x faster than CFS for the many small per-config writes). Easiest pattern:
-#   cd $SCRATCH/potmill_experiments
+#   cd $SCRATCH/PotMill_experiments
 #   mkdir my_run && cd my_run
 #   cp <repo>/examples/HBeW/ACE/{inputfile,FitSNAP.in,run_perlmutter.sh} .
 #   sbatch run_perlmutter.sh
@@ -24,7 +24,7 @@ set -uo pipefail
 
 # ---------- USER-SPECIFIC PATHS (edit me) -----------------------------------
 CONDA_ENV=/global/cfs/cdirs/m1883/ilgar/conda_envs/potmill   # conda env with jax, ase, lammps, fitsnap3lib, fairchem, torch, executorlib
-POTMILL=$HOME/codes/potmill                                   # this repo's clone
+POTMILL=$HOME/codes/PotMill                                   # this repo's clone
 EXECUTORLIB=$HOME/codes/executorlib/src                        # executorlib clone with the PR #589 dynamic max_workers + id()-dedup fix
 SUBDATAPY=/global/cfs/cdirs/m1883/ilgar/codes/SubDataPy        # SubDataPy for GPU lstsq (optional -- fit.py falls back if missing)
 # ----------------------------------------------------------------------------

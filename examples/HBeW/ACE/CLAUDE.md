@@ -78,7 +78,7 @@ small per-config writes). The repo `run_perlmutter.sh` is a 4-node premium 4h `s
 that handles everything once you edit its `USER-SPECIFIC PATHS` block:
 
 ```bash
-cd $SCRATCH/potmill_experiments
+cd $SCRATCH/PotMill_experiments
 mkdir my_HBeW_run && cd my_HBeW_run
 cp <repo>/examples/HBeW/ACE/{inputfile,FitSNAP.in,run_perlmutter.sh} .
 # edit run_perlmutter.sh CONDA_ENV / POTMILL / EXECUTORLIB / SUBDATAPY paths
