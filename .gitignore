@@ -11,28 +11,28 @@ examples/**
 !examples/HBeW/
 !examples/HBeW/ACE/
 
-!examples/Be/ACE/inputfile
+!examples/Be/ACE/config.ini
 !examples/Be/ACE/FitSNAP.in
 !examples/Be/ACE/run_debug.sh
 !examples/Be/ACE/pot.yace
 !examples/Be/ACE/run_lammps_ase.sh
 !examples/Be/ACE/run_vasp_6.3.2_std_ase.sh
-!examples/Be/SNAP/inputfile
+!examples/Be/SNAP/config.ini
 !examples/Be/SNAP/FitSNAP.in
 !examples/Be/SNAP/run_debug.sh
 !examples/Be/SNAP/run_vasp_6.3.2_std_ase.sh
-!examples/WRe/ACE/inputfile
+!examples/WRe/ACE/config.ini
 !examples/WRe/ACE/FitSNAP.in
 !examples/WRe/ACE/run_debug.sh
 !examples/WRe/ACE/run_perlmutter.sh
 !examples/WRe/ACE/run_vasp_6.3.2_std_ase.sh
 !examples/WRe/ACE/CLAUDE.md
-!examples/WRe/SNAP/inputfile
+!examples/WRe/SNAP/config.ini
 !examples/WRe/SNAP/FitSNAP.in
 !examples/WRe/SNAP/run_debug.sh
 !examples/WRe/SNAP/run_vasp_6.3.2_std_ase.sh
 
-!examples/HBeW/ACE/inputfile
+!examples/HBeW/ACE/config.ini
 !examples/HBeW/ACE/FitSNAP.in
 !examples/HBeW/ACE/run_perlmutter.sh
 !examples/HBeW/ACE/CLAUDE.md

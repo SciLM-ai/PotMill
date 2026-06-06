@@ -7,7 +7,7 @@
 # is ~1.7x faster than CFS for the many small per-config writes). Easiest pattern:
 #   cd $SCRATCH/PotMill_experiments
 #   mkdir my_run && cd my_run
-#   cp <repo>/examples/HBeW/ACE/{inputfile,FitSNAP.in,run_perlmutter.sh} .
+#   cp <repo>/examples/HBeW/ACE/{config.ini,FitSNAP.in,run_perlmutter.sh} .
 #   sbatch run_perlmutter.sh
 
 #SBATCH -J potmill_HBeW

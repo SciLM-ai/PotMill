@@ -1,7 +1,8 @@
 import os, pickle
 from potmill.tools import create_rcut_range, rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
 from potmill.tools import hyperparameters_to_string, create_eweight_range
-from potmill.tools import combined_ace_hyperparameters, combined_snap_hyperparameters, parse_inputfile, configparse
+from potmill.tools import combined_ace_hyperparameters, combined_snap_hyperparameters
+from potmill.config import ConfigManager, load_fitsnap_config
 from potmill.featurize import featurize, init_featurize
 from potmill.vasp import vasp
 from potmill.uma import uma, uma_batch, init_uma_calculator, init_uma_predictor
@@ -133,9 +134,8 @@ def main():
     )
 
     start_path = os.getcwd()+'/'
-    config = parse_inputfile(start_path+"inputfile")
-    fitsnap_config = configparse(start_path + config['FitSNAP']['filename'])
-    fitsnap_config = {section: dict(fitsnap_config.items(section)) for section in fitsnap_config.sections()}
+    config = ConfigManager(start_path+"config.ini")
+    fitsnap_config = load_fitsnap_config(start_path + config['FitSNAP']['filename'])
 
     mlip = config["FitSNAP"]["mlip"]
     resume_mode = config["MAIN"]["resume"]
@@ -197,23 +197,7 @@ def main():
         hyperparameters_list_noeweight = combined_snap_hyperparameters(config, w_eweight=False)
         fitsnap_config["BISPECTRUM"]["twojmax"] = twojmaxes_to_string(config["TWOJMAX"]["max_twojmax"])
 
-    # WARN (do NOT auto-override -- users may have custom pair_style setups) if FitSNAP.in
-    # [REFERENCE] pair_style cutoff < inputfile [RCUT] max_rcut. LAMMPS compute pace aborts
-    # any featurize task with rcut > pair_style cutoff:
-    #   "ERROR: Compute pace cutoff is longer than pairwise cutoff (src/ML-PACE/compute_pace.cpp:129)"
-    # With restart_limit=3 on the block executors those tasks fail cleanly instead of deadlocking,
-    # but the affected tasks' results are still lost -- so the user should fix FitSNAP.in.
-    # See CLAUDE.md "Configuration constraints".
-    import re as _re
-    _ps_m = _re.match(r"\s*zero\s+([0-9.]+)", fitsnap_config.get("REFERENCE", {}).get("pair_style", ""))
-    if _ps_m and float(_ps_m.group(1)) < float(config["RCUT"]["max_rcut"]):
-        _ps_cut = float(_ps_m.group(1))
-        _max_rcut = float(config["RCUT"]["max_rcut"])
-        print(f"WARNING: FitSNAP.in [REFERENCE] pair_style cutoff ({_ps_cut}) < inputfile "
-              f"[RCUT] max_rcut ({_max_rcut}). LAMMPS will abort featurize tasks with "
-              f"rcut > {_ps_cut} with 'compute pace cutoff > pair_style cutoff' "
-              f"(src/ML-PACE/compute_pace.cpp:129). "
-              f"FIX FitSNAP.in:  pair_style = zero {_max_rcut + 0.1}", flush=True)
+    config.validate(fitsnap_config)
 
     if not resume_mode and entropy_mode:
         os.system("rm -rf "+start_path+"entropy")
@@ -361,7 +345,7 @@ def main():
                             rcuts = rcuts_list[j]
                             feature_directory = f"{start_path}features/{i}/{rcuts_to_string(rcuts, delimiter='_')}"
                             os.makedirs(feature_directory, exist_ok=True)
-                            fs = featurize_exe.submit(featurize, batched_labeling_future, config, fitsnap_config, rcuts, feature_directory)
+                            fs = featurize_exe.submit(featurize, batched_labeling_future, config.as_dict, fitsnap_config, rcuts, feature_directory)
                             fs.task_ = (i,j)
                             featurization_futures_temp.append(fs)
                         featurization_futures.append(featurization_futures_temp)
@@ -431,7 +415,7 @@ def main():
                         costs_directory = start_path + "costs/"
                         costs_directory += hyperparameters_to_string(mlip, hyperparams, delimiter='_', w_eweight=False)
                         os.makedirs(costs_directory, exist_ok=True)
-                        fs = exe.submit(featurize, atoms4cost, config, fitsnap_config, rcuts, costs_directory,
+                        fs = exe.submit(featurize, atoms4cost, config.as_dict, fitsnap_config, rcuts, costs_directory,
                                         only_cost=True, hyperparameters_noeweight=hyperparams,
                                         cost_nstructures=cost_nstructures,
                                         resource_dict={"cores": 1, "gpus_per_core": 0, "num_nodes": 1,

@@ -1,6 +1,5 @@
 import numpy as np
 import configparser
-import sys
 from itertools import product
 
 
@@ -108,10 +107,10 @@ def combined_snap_hyperparameters(config, w_eweight=True):
 def interpret_string(string):
     try:
         return int(string)
-    except:
+    except ValueError:
         try:
             return float(string)
-        except:
+        except ValueError:
             if ' ' in string:
                 return [interpret_string(substring) for substring in string.split()]
             else:
@@ -123,45 +122,3 @@ def configparse(input_path):
     config.optionxform = str
     config.read(input_path)
     return config
-
-
-def parse_inputfile(input_path):
-    config = configparse(input_path)
-    config_dict = {}
-    for section in config.sections():
-        config_dict[section] = {}
-        for option in config.options(section):
-            config_dict[section][option] = interpret_string(config[section][option])
-    return config_dict
-
-
-def update_fitsnap_config(config,chem_elem,rcut_list,twojmax_list):
-    config['BISPECTRUM']['radelem'] = rcuts_to_string([rcut/2 for rcut in rcut_list])
-    config['BISPECTRUM']['twojmax'] = twojmaxes_to_string(twojmax_list)
-    config['BISPECTRUM']['type'] = ' '.join(chem_elem)
-    return config
-
-
-def interpret_data_format(parent_dirpath, config, fitsnap_config):
-    if config['DATA']['format'] == 'ase':
-        pass
-    
-    elif config['DATA']['format'] == 'json':
-        if not 'SCRAPER' in fitsnap_config.sections():
-            fitsnap_config.add_section('SCRAPER')
-            fitsnap_config.set('SCRAPER','scraper','JSON')
-        else:
-            fitsnap_config['SCRAPER']['scraper'] = 'JSON'
-
-        if not 'PATH' in fitsnap_config.sections():
-            fitsnap_config.add_section('PATH')
-            fitsnap_config.set('PATH','dataPath',parent_dirpath+config['DATA']['data_path'])
-        else:
-            fitsnap_config['PATH']['dataPath'] = parent_dirpath+config['DATA']['data_path']
-
-        with open(parent_dirpath+config['FitSNAP']['filename'],'w') as configfile:
-            fitsnap_config.write(configfile)
-
-    else:
-        sys.exit("Invalid data format. Please check the inputfile.")
-    return 0
