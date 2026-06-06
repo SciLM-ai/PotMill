@@ -1,0 +1,60 @@
+{# Scaffold conda recipe for a conda-forge feedstock. Copy into conda-forge/staged-recipes #}
+{# (recipes/potmill/meta.yaml) once a tagged release is published, then update sha256.    #}
+{% set name = "potmill" %}
+{% set version = "0.1.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  # For staged-recipes, point at the published sdist/tarball and fill in sha256.
+  url: https://github.com/IlgarBaghishov/PotMill/archive/refs/tags/v{{ version }}.tar.gz
+  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+
+build:
+  noarch: python
+  number: 0
+  script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -vv
+  entry_points:
+    - potmill = potmill.__main__:main
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - hatchling
+  run:
+    - python >=3.10
+    - numpy
+    - scipy
+    - pandas
+    - scikit-learn
+    - ase
+    - ase-ga
+    - spglib
+    - mendeleev
+    - jax
+    - executorlib
+    # Scheduler / MPI / labeling stack (conda-only or built-from-source):
+    - flux-core
+    - flux-sched
+    - mpi4py
+    # Optional backends (not hard requirements):
+    #   - fairchem-core      # UMA labeling
+    #   - POPSRegression     # uncertainty quantification
+    # LAMMPS (with MLIAP/SNAP/ML-PACE) and FitSNAP are built per the README.
+
+test:
+  imports:
+    - potmill
+
+about:
+  home: https://github.com/IlgarBaghishov/PotMill
+  license: BSD-3-Clause
+  license_file: LICENSE
+  summary: Automated active-design pipeline for machine-learned interatomic potentials
+
+extra:
+  recipe-maintainers:
+    - IlgarBaghishov

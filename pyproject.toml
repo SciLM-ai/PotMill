@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "potmill"
+description = "Automated active-design pipeline for machine-learned interatomic potentials"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Ilgar Baghishov", email = "il.baghishov@gmail.com" }]
+keywords = ["MLIP", "interatomic-potential", "active-learning", "HPC", "ACE", "SNAP"]
+dynamic = ["version"]
+
+# Only pip-installable runtime dependencies are listed here. The Flux scheduler stack
+# (flux-core, flux-sched), mpi4py, LAMMPS (with MLIAP/SNAP/ML-PACE) and FitSNAP are
+# conda-only / built-from-source and are documented in the README and conda/meta.yaml.
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "scikit-learn",
+    "ase",
+    "ase-ga",
+    "spglib",
+    "mendeleev",
+    "jax",
+    "executorlib",
+]
+
+[project.optional-dependencies]
+uma = ["fairchem-core"]
+uncertainty = ["POPSRegression"]
+test = ["pytest"]
+dev = ["ruff", "black", "mypy", "pre-commit", "pytest"]
+all = ["fairchem-core", "POPSRegression"]
+
+[project.scripts]
+potmill = "potmill.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/IlgarBaghishov/PotMill"
+
+[tool.hatch.version]
+path = "potmill/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["potmill"]
+
+[tool.ruff]
+line-length = 100
+exclude = ["examples", "docs", "conda"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # Pyflakes
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "I",    # isort
+    "C4",   # flake8-comprehensions
+    "ERA",  # eradicate (commented-out code)
+    "PL",   # pylint
+]
+ignore = [
+    "E501",     # line length (handled by the formatter)
+    "PLC0415",  # imports deferred inside functions (intentional for cloudpickle workers)
+    "PLR0913",  # too many arguments
+    "PLR0915",  # too many statements
+    "PLR0912",  # too many branches
+    "PLR2004",  # magic value comparison
+]
+
+[tool.black]
+line-length = 100
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

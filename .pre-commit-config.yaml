@@ -1,0 +1,11 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.1
+    hooks:
+      - id: ruff
+        name: ruff lint
+        args: ["--fix"]
+        files: ^potmill/
+      - id: ruff-format
+        name: ruff format
+        files: ^potmill/
