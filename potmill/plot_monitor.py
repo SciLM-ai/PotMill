@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Post-processing plot for autopiad pipeline monitoring data.
+"""Post-processing plot for PotMill pipeline monitoring data.
 
 Generates a 3-panel figure with shared x-axis (elapsed time):
   Panel 1: Mean GPU utilization (%)
@@ -7,7 +7,7 @@ Generates a 3-panel figure with shared x-axis (elapsed time):
   Panel 3: Gantt chart of pipeline stage activity
 
 Usage:
-    python -m autopiad.plot_monitor [path/to/pipeline_monitor.csv] [-o output.pdf]
+    python -m potmill.plot_monitor [path/to/pipeline_monitor.csv] [-o output.pdf]
 """
 
 import argparse
@@ -72,7 +72,7 @@ def _find_active_spans(t, active, gap_tolerance_min=0.5):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot autopiad pipeline monitoring data")
+    parser = argparse.ArgumentParser(description="Plot PotMill pipeline monitoring data")
     parser.add_argument("csv", nargs="?", default="pipeline_monitor.csv",
                         help="Path to pipeline_monitor.csv")
     parser.add_argument("--output", "-o", default=None,
@@ -158,7 +158,7 @@ def main():
     ax_gantt.tick_params(labelsize=9)
     ax_gantt.set_xlim(t[0], t[-1])
 
-    fig.suptitle("autopiad Pipeline Resource Monitor", fontsize=13, fontweight="bold")
+    fig.suptitle("PotMill Pipeline Resource Monitor", fontsize=13, fontweight="bold")
     fig.align_ylabels(axes)
     fig.subplots_adjust(hspace=0.08, top=0.94)
     fig.savefig(args.output, dpi=200, bbox_inches="tight")

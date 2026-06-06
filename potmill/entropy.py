@@ -16,8 +16,8 @@ def max_entropy_atoms_iterator(structuregen_config):
     jax.config.update("jax_enable_x64", True)
     jax.config.update("jax_platform_name", "cpu")
 
-    from autopiad.structuregen.renorm import RandomEntropyInitializer
-    from autopiad.structuregen.optimizer import EntropyMaximizer
+    from potmill.structuregen.renorm import RandomEntropyInitializer
+    from potmill.structuregen.optimizer import EntropyMaximizer
 
     os.makedirs("renorm_configs", exist_ok=True)
     os.makedirs("configs", exist_ok=True)

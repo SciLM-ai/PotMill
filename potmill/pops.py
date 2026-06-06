@@ -5,8 +5,8 @@ def pops(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamet
     import numpy as np
     import pandas as pd
     from POPSRegression import POPSRegression
-    from autopiad.tools import rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
-    from autopiad.fit import config_fold
+    from potmill.tools import rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
+    from potmill.fit import config_fold
 
     if isinstance(feature_names[0][0],list): feature_names = feature_names[0]
     

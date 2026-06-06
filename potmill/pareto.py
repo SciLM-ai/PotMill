@@ -4,7 +4,7 @@ def pareto(start_path, vasp_batch_idx, hyperparameters_list, hyperparameters_lis
 
     import pandas as pd
     import glob
-    from autopiad.tools import ace_hyperparameters_to_string, snap_hyperparameters_to_string
+    from potmill.tools import ace_hyperparameters_to_string, snap_hyperparameters_to_string
 
     results_dirs = glob.glob(f"{start_path}fits/{vasp_batch_idx}/*")
     results_df = pd.DataFrame()

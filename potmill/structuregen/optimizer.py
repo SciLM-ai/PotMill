@@ -9,16 +9,16 @@ from ase.io import write
 from ase.optimize.bfgslinesearch import BFGSLineSearch
 from ase.calculators.lammpslib import LAMMPSlib
 
-from autopiad.structuregen.model import CNModel, CNManager
-from autopiad.structuregen.calculator import (
+from potmill.structuregen.model import CNModel, CNManager
+from potmill.structuregen.calculator import (
     EntropyCalculator, SoftRepulsionCalculator, compute_descriptors,
     generate_random_cell_binary, generate_random_cell)
-from autopiad.structuregen.lammps_utils import (
+from potmill.structuregen.lammps_utils import (
     compute_n_descriptors, write_mliap_descriptor,
     generate_lammps_scripts, write_mliap_descriptor_multi,
     generate_binary_lammps_scripts)
-from autopiad.structuregen.samplers import BinaryRadiusSampler, MendeleevUniformRadiusSampler
-from autopiad.structuregen.renorm import _check_distances_binary, _check_distances_multi
+from potmill.structuregen.samplers import BinaryRadiusSampler, MendeleevUniformRadiusSampler
+from potmill.structuregen.renorm import _check_distances_binary, _check_distances_multi
 
 
 class EntropyMaximizer:

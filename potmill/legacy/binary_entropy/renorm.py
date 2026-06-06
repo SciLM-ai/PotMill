@@ -20,8 +20,8 @@ from ase.optimize.bfgslinesearch import BFGSLineSearch
 from ase.calculators.lammpslib import LAMMPSlib
 from ase.data import covalent_radii, atomic_numbers
 
-import autopiad.binary_entropy.calculator as entropy
-from autopiad.binary_entropy.model import CNModel, CNManager
+import potmill.binary_entropy.calculator as entropy
+from potmill.binary_entropy.model import CNModel, CNManager
 # from pybispectrum import calc_bispectrum_names
 
 

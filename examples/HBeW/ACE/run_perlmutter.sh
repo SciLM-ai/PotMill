@@ -5,12 +5,12 @@
 #
 # Per the main CLAUDE.md "Run directory placement", submit from $SCRATCH (Lustre
 # is ~1.7x faster than CFS for the many small per-config writes). Easiest pattern:
-#   cd $SCRATCH/autopiad_experiments
+#   cd $SCRATCH/potmill_experiments
 #   mkdir my_run && cd my_run
 #   cp <repo>/examples/HBeW/ACE/{inputfile,FitSNAP.in,run_perlmutter.sh} .
 #   sbatch run_perlmutter.sh
 
-#SBATCH -J autopiad_HBeW
+#SBATCH -J potmill_HBeW
 #SBATCH -A m1883_g
 #SBATCH -C gpu
 #SBATCH --gpus-per-node=4
@@ -23,8 +23,8 @@
 set -uo pipefail
 
 # ---------- USER-SPECIFIC PATHS (edit me) -----------------------------------
-CONDA_ENV=/global/cfs/cdirs/m1883/ilgar/conda_envs/autopiad   # conda env with jax, ase, lammps, fitsnap3lib, fairchem, torch, executorlib
-AUTOPIAD=$HOME/codes/autopiad                                  # this repo's clone
+CONDA_ENV=/global/cfs/cdirs/m1883/ilgar/conda_envs/potmill   # conda env with jax, ase, lammps, fitsnap3lib, fairchem, torch, executorlib
+AUTOPIAD=$HOME/codes/potmill                                  # this repo's clone
 EXECUTORLIB=$HOME/codes/executorlib/src                        # executorlib clone with the PR #589 dynamic max_workers + id()-dedup fix
 SUBDATAPY=/global/cfs/cdirs/m1883/ilgar/codes/SubDataPy        # SubDataPy for GPU lstsq (optional -- fit.py falls back if missing)
 # ----------------------------------------------------------------------------
@@ -44,6 +44,6 @@ echo "NODES=$SLURM_NNODES"
 
 # Flux drives executorlib's nested entropy / labeling / featurize / fitting / pareto
 # executors. Run python -u so all worker prints flush in real time.
-srun -N "$SLURM_NNODES" -n "$SLURM_NNODES" flux start python -u -m autopiad
+srun -N "$SLURM_NNODES" -n "$SLURM_NNODES" flux start python -u -m potmill
 
 date

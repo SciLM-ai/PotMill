@@ -1,4 +1,8 @@
-# autopiad
+# PotMill
+
+(Formerly `autopiad`. The importable package and module entry point are now `potmill`,
+e.g. `python -u -m potmill`. The conda env, repo directory, and `$WORK` launchers below
+intentionally keep their existing `autopiad` names.)
 
 Installation that worked on Chicoma (it might be outdated now):
 
@@ -21,9 +25,9 @@ pip install POPSRegression
 
 Installation for Perlmutter:
 
-CONDA_OVERRIDE_CUDA="12.9" mamba create -p /global/cfs/cdirs/m1883/ilgar/conda_envs/autopiad -c conda-forge python=3.12 flux-core flux-sched executorlib cxx-compiler mpi4py "libhwloc=*=cuda*" ase numpy scipy pandas spglib jax scikit-learn Cython
+CONDA_OVERRIDE_CUDA="12.9" mamba create -p /global/cfs/cdirs/m1883/ilgar/conda_envs/potmill -c conda-forge python=3.12 flux-core flux-sched executorlib cxx-compiler mpi4py "libhwloc=*=cuda*" ase numpy scipy pandas spglib jax scikit-learn Cython
 
-mamba activate autopiad
+mamba activate potmill
 
 Check if flux installed properly:
 srun -N 2 -n 2 flux start flux resource list

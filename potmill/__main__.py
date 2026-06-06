@@ -1,16 +1,16 @@
 import os, pickle
-from autopiad.tools import create_rcut_range, rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
-from autopiad.tools import hyperparameters_to_string, create_eweight_range
-from autopiad.tools import combined_ace_hyperparameters, combined_snap_hyperparameters, parse_inputfile, configparse
-from autopiad.featurize import featurize, init_featurize
-from autopiad.vasp import vasp
-from autopiad.uma import uma, uma_batch, init_uma_calculator, init_uma_predictor
-from autopiad.lammps import lammps
-from autopiad.fake_vasp import fake_vasp
-from autopiad.fit import fit, foldfit, init_fit
-from autopiad.pareto import pareto
-from autopiad.pops import pops
-from autopiad.monitor import ResourceMonitor
+from potmill.tools import create_rcut_range, rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
+from potmill.tools import hyperparameters_to_string, create_eweight_range
+from potmill.tools import combined_ace_hyperparameters, combined_snap_hyperparameters, parse_inputfile, configparse
+from potmill.featurize import featurize, init_featurize
+from potmill.vasp import vasp
+from potmill.uma import uma, uma_batch, init_uma_calculator, init_uma_predictor
+from potmill.lammps import lammps
+from potmill.fake_vasp import fake_vasp
+from potmill.fit import fit, foldfit, init_fit
+from potmill.pareto import pareto
+from potmill.pops import pops
+from potmill.monitor import ResourceMonitor
 import flux
 import concurrent.futures
 import flux.job
@@ -98,7 +98,7 @@ def make_init_atoms_from_entropy(structuregen_config):
         worker_config['shared_state_dir'] = shared_dir
         worker_config['shared_descriptor_dir'] = descriptor_dir
 
-        from autopiad.entropy import max_entropy_atoms_iterator
+        from potmill.entropy import max_entropy_atoms_iterator
         return {"entropy_iterator": max_entropy_atoms_iterator(worker_config)}
     return init_atoms_from_entropy
 

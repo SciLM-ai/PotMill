@@ -1,10 +1,11 @@
-# autopiad
+# PotMill
 
-Automated Pipeline for Interatomic Potential Active Design.
+Automated active-design pipeline for machine-learned interatomic potentials.
+(Formerly `autopiad` — the importable package is now `potmill`.)
 
 ## Overview
 
-autopiad is an HPC pipeline that iteratively generates training data for machine learning interatomic potentials (MLIPs) by maximizing information entropy in the descriptor space. It orchestrates:
+PotMill is an HPC pipeline that iteratively generates training data for machine learning interatomic potentials (MLIPs) by maximizing information entropy in the descriptor space. It orchestrates:
 
 1. **Structure generation** (entropy maximization) - generates atomic configurations that maximally explore the bispectrum descriptor space
 2. **Labeling** - computes DFT-quality energies and forces using VASP or universal ML potentials (fairchem/UMA)
@@ -39,7 +40,7 @@ This pipelining is essential for GPU utilization: without it, GPUs sit idle wait
 ## Package structure
 
 ```
-autopiad/
+potmill/
   __main__.py          # Main orchestrator, executor setup, pipeline coordination
   entropy.py           # Bridge to structuregen module
   structuregen/        # Unified structure generation (entropy maximization)
@@ -79,7 +80,7 @@ Both methods follow the same two-phase approach:
 ## Running
 
 ```bash
-srun -N $SLURM_NNODES -n $SLURM_NNODES flux start python -u -m autopiad
+srun -N $SLURM_NNODES -n $SLURM_NNODES flux start python -u -m potmill
 ```
 
 ## Run directory placement (ALWAYS use $SCRATCH)
@@ -91,16 +92,16 @@ trajs, features). CPU util on CFS was ~5–20% (workers I/O-blocked) vs ~40% on 
 (workers actually computing).
 
 Workflow pattern (implemented in `launch_scratch.sh`):
-1. `$WORK/autopiad_runs/` keeps persistent inputs (`inputfile_*`, `FitSNAP.in`, `sbatch_*.sh`,
+1. `$WORK/potmill_runs/` keeps persistent inputs (`inputfile_*`, `FitSNAP.in`, `sbatch_*.sh`,
    `launch_scratch.sh`) and small post-run results in `<name>_results/`
    (`pipeline_monitor.csv`, `pareto-front/`, log).
-2. `$SCRATCH/autopiad_experiments/<run_name>/` is the working directory during execution —
+2. `$SCRATCH/potmill_experiments/<run_name>/` is the working directory during execution —
    all heavy intermediate files (`entropy/`, `labeling/`, `features/`, `fits/`) live here.
 3. After the job, `launch_scratch.sh` copies the small artifacts back to
-   `$WORK/autopiad_runs/<name>_results/`. The heavy scratch dir is left in place for
+   `$WORK/potmill_runs/<name>_results/`. The heavy scratch dir is left in place for
    analysis (or eventual scratch purge).
 
-Do **not** put run output dirs under `$WORK/autopiad_runs/<name>` directly anymore — use
+Do **not** put run output dirs under `$WORK/potmill_runs/<name>` directly anymore — use
 `launch_scratch.sh`.
 
 ## Configuration
@@ -122,7 +123,7 @@ ERROR: Compute pace cutoff is longer than pairwise cutoff (src/ML-PACE/compute_p
 ```
 
 The pipeline prints a `WARNING:` line at startup if it detects this mismatch (logic lives in
-`autopiad/__main__.py` right after the hyperparameter setup). It does NOT auto-override the
+`potmill/__main__.py` right after the hyperparameter setup). It does NOT auto-override the
 user's `pair_style` — users may have custom pair_style setups (more complex than `zero <X>`),
 so the right action is to update `FitSNAP.in`:
 
@@ -157,9 +158,9 @@ surface it to the user immediately and propose the one-line fix to FitSNAP.in.**
 
 ### What was done
 
-1. **Created `autopiad/structuregen/` module** with 7 files combining `binary_entropy/` and `multi_element_entropy/` into one unified directory. Both methods dispatched via `config['method']` ('binary' or 'multi_element').
+1. **Created `potmill/structuregen/` module** with 7 files combining `binary_entropy/` and `multi_element_entropy/` into one unified directory. Both methods dispatched via `config['method']` ('binary' or 'multi_element').
 
-2. **Updated `entropy.py`** to accept `structuregen_config` parameter and import from `autopiad.structuregen` instead of `autopiad.binary_entropy`.
+2. **Updated `entropy.py`** to accept `structuregen_config` parameter and import from `potmill.structuregen` instead of `potmill.binary_entropy`.
 
 3. **Updated `__main__.py`** with:
    - Closure pattern for executorlib's `init_function` (which accepts NO arguments):
@@ -213,7 +214,7 @@ def make_init_atoms_from_entropy(structuregen_config):
         # executorlib_worker_id is auto-injected by executorlib
         worker_config = structuregen_config.copy()
         worker_config['_worker_id'] = executorlib_worker_id
-        from autopiad.entropy import max_entropy_atoms_iterator
+        from potmill.entropy import max_entropy_atoms_iterator
         return {"entropy_iterator": max_entropy_atoms_iterator(worker_config)}
     return init_atoms_from_entropy
 ```
@@ -222,22 +223,22 @@ The closure works because executorlib uses `cloudpickle` (not stdlib pickle) for
 ### Files created/modified in this refactoring
 
 **Created (new, untracked):**
-- `autopiad/structuregen/__init__.py` (empty)
-- `autopiad/structuregen/model.py` - CNModel with mask slicing, CNManager with jaxnp.linalg.slogdet
-- `autopiad/structuregen/calculator.py` - EntropyCalculator, generate_random_cell (both variants)
-- `autopiad/structuregen/lammps_utils.py` - SNAP descriptor files, LAMMPS script generation (both `generate_lammps_scripts` for multi_element and `generate_binary_lammps_scripts` for binary)
-- `autopiad/structuregen/samplers.py` - BinaryRadiusSampler (returns 3 independent radii), MendeleevUniformRadiusSampler
-- `autopiad/structuregen/renorm.py` - RandomEntropyInitializer (binary + multi_element), `_check_distances_binary`, `_check_distances_multi`
-- `autopiad/structuregen/optimizer.py` - EntropyMaximizer (binary + multi_element)
+- `potmill/structuregen/__init__.py` (empty)
+- `potmill/structuregen/model.py` - CNModel with mask slicing, CNManager with jaxnp.linalg.slogdet
+- `potmill/structuregen/calculator.py` - EntropyCalculator, generate_random_cell (both variants)
+- `potmill/structuregen/lammps_utils.py` - SNAP descriptor files, LAMMPS script generation (both `generate_lammps_scripts` for multi_element and `generate_binary_lammps_scripts` for binary)
+- `potmill/structuregen/samplers.py` - BinaryRadiusSampler (returns 3 independent radii), MendeleevUniformRadiusSampler
+- `potmill/structuregen/renorm.py` - RandomEntropyInitializer (binary + multi_element), `_check_distances_binary`, `_check_distances_multi`
+- `potmill/structuregen/optimizer.py` - EntropyMaximizer (binary + multi_element)
 
 **Modified:**
-- `autopiad/entropy.py` - now takes structuregen_config param, imports from structuregen
-- `autopiad/__main__.py` - closure pattern, STRUCTUREGEN config parsing
+- `potmill/entropy.py` - now takes structuregen_config param, imports from structuregen
+- `potmill/__main__.py` - closure pattern, STRUCTUREGEN config parsing
 - `examples/WRe/ACE/inputfile` - added [STRUCTUREGEN] section
 
 **Legacy (kept for reference, not modified):**
-- `autopiad/binary_entropy/` - original binary implementation
-- `autopiad/multi_element_entropy/` - original multi-element implementation
+- `potmill/binary_entropy/` - original binary implementation
+- `potmill/multi_element_entropy/` - original multi-element implementation
 
 ---
 
@@ -311,9 +312,9 @@ For multi_element with `strict_entropy_decrease=0` (default), acceptance is pure
 
 ### Files modified
 
-- `autopiad/structuregen/calculator.py` — Added `SoftRepulsionCalculator` class, added `from ase.calculators.calculator import Calculator, all_changes`
-- `autopiad/structuregen/optimizer.py` — Import `SoftRepulsionCalculator`, rewrote `_create_multi_element_config()` with pure Python soft relax, early distance check, deferred LAMMPS creation, conditional entropy relaxation
-- `autopiad/structuregen/renorm.py` — Import `SoftRepulsionCalculator`, rewrote `_create_multi_element_config()` with same optimizations
+- `potmill/structuregen/calculator.py` — Added `SoftRepulsionCalculator` class, added `from ase.calculators.calculator import Calculator, all_changes`
+- `potmill/structuregen/optimizer.py` — Import `SoftRepulsionCalculator`, rewrote `_create_multi_element_config()` with pure Python soft relax, early distance check, deferred LAMMPS creation, conditional entropy relaxation
+- `potmill/structuregen/renorm.py` — Import `SoftRepulsionCalculator`, rewrote `_create_multi_element_config()` with same optimizations
 
 ### Detailed change log
 

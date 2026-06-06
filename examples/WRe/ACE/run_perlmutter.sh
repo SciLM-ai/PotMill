@@ -17,6 +17,6 @@ pwd; hostname -f; date
 # export NVIDIA_DIR="${PY_SITE_PKGS}/nvidia"
 # export LD_LIBRARY_PATH="${NVIDIA_DIR}/cuda_runtime/lib:${NVIDIA_DIR}/nvjitlink/lib:${NVIDIA_DIR}/cusparse/lib:${NVIDIA_DIR}/cublas/lib:${NVIDIA_DIR}/cufft/lib:${NVIDIA_DIR}/cudnn/lib:${NVIDIA_DIR}/curand/lib:${NVIDIA_DIR}/cusolver/lib:${NVIDIA_DIR}/nccl/lib:${LD_LIBRARY_PATH}"
 
-srun -N $SLURM_NNODES -n $SLURM_NNODES flux start python -u -m autopiad
+srun -N $SLURM_NNODES -n $SLURM_NNODES flux start python -u -m potmill
 
 date

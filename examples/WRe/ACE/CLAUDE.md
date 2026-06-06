@@ -4,7 +4,7 @@ See the main [CLAUDE.md](../../../CLAUDE.md) for full package documentation.
 
 ## Overview
 
-This example runs the full autopiad pipeline for a tungsten-rhenium (W-Re) binary system using ACE (Atomic Cluster Expansion) descriptors. It uses the **binary** entropy method for structure generation, UMA (fairchem universal ML potential) for labeling, and sweeps over ACE hyperparameters (rcut, nmax, lmax, eweight).
+This example runs the full PotMill pipeline for a tungsten-rhenium (W-Re) binary system using ACE (Atomic Cluster Expansion) descriptors. It uses the **binary** entropy method for structure generation, UMA (fairchem universal ML potential) for labeling, and sweeps over ACE hyperparameters (rcut, nmax, lmax, eweight).
 
 ## Files
 
@@ -20,7 +20,7 @@ This example runs the full autopiad pipeline for a tungsten-rhenium (W-Re) binar
 
 From this directory on a Perlmutter interactive session or via batch:
 ```bash
-srun -N $SLURM_NNODES -n $SLURM_NNODES flux start python -u -m autopiad
+srun -N $SLURM_NNODES -n $SLURM_NNODES flux start python -u -m potmill
 ```
 
 ## Output directories

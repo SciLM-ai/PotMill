@@ -6,7 +6,7 @@ def init_featurize():
     from mpi4py import MPI
     from fitsnap3lib.fitsnap import FitSnap
     from fitsnap3lib.scrapers.ase_funcs import ase_scraper
-    from autopiad.tools import rcuts_to_string
+    from potmill.tools import rcuts_to_string
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -26,7 +26,7 @@ def featurize(atoms_traj, config, fitsnap_config, rcuts, feature_directory,
     import numpy as np
     from fitsnap3lib.fitsnap import FitSnap
     from fitsnap3lib.scrapers.ase_funcs import ase_scraper
-    from autopiad.tools import rcuts_to_string
+    from potmill.tools import rcuts_to_string
 
     os.chdir(feature_directory)
 

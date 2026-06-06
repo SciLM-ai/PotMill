@@ -4,7 +4,7 @@ See the main [CLAUDE.md](../../../CLAUDE.md) for full package documentation.
 
 ## Overview
 
-This example runs the full autopiad pipeline for a ternary hydrogen-beryllium-tungsten (H-Be-W) system using ACE descriptors. It uses the **multi_element** entropy method for structure generation, which supports arbitrary numbers of elements via Mendeleev-based pseudo-species radius sampling. UMA (fairchem universal ML potential) is used for labeling, and the pipeline sweeps over ACE hyperparameters (rcut, nmax, lmax, eweight).
+This example runs the full PotMill pipeline for a ternary hydrogen-beryllium-tungsten (H-Be-W) system using ACE descriptors. It uses the **multi_element** entropy method for structure generation, which supports arbitrary numbers of elements via Mendeleev-based pseudo-species radius sampling. UMA (fairchem universal ML potential) is used for labeling, and the pipeline sweeps over ACE hyperparameters (rcut, nmax, lmax, eweight).
 
 ## Key difference from binary examples (e.g., WRe)
 
@@ -78,7 +78,7 @@ small per-config writes). The repo `run_perlmutter.sh` is a 4-node premium 4h `s
 that handles everything once you edit its `USER-SPECIFIC PATHS` block:
 
 ```bash
-cd $SCRATCH/autopiad_experiments
+cd $SCRATCH/potmill_experiments
 mkdir my_HBeW_run && cd my_HBeW_run
 cp <repo>/examples/HBeW/ACE/{inputfile,FitSNAP.in,run_perlmutter.sh} .
 # edit run_perlmutter.sh CONDA_ENV / AUTOPIAD / EXECUTORLIB / SUBDATAPY paths

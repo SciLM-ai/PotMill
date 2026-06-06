@@ -1,17 +1,17 @@
 import pandas as pd
 import os, copy, time, pickle, traceback
 from ase.io import write
-from autopiad.tools import create_rcut_range, rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
-from autopiad.tools import hyperparameters_to_string
-from autopiad.tools import combined_ace_hyperparameters, combined_snap_hyperparameters, parse_inputfile, configparse
-from autopiad.entropy import get_max_entropy_atoms 
-from autopiad.featurize import featurize
-from autopiad.vasp import vasp
-from autopiad.lammps import lammps
-from autopiad.fake_vasp import fake_vasp
-from autopiad.fit import fit
-from autopiad.pareto import pareto
-from autopiad.pops import pops
+from potmill.tools import create_rcut_range, rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
+from potmill.tools import hyperparameters_to_string
+from potmill.tools import combined_ace_hyperparameters, combined_snap_hyperparameters, parse_inputfile, configparse
+from potmill.entropy import get_max_entropy_atoms 
+from potmill.featurize import featurize
+from potmill.vasp import vasp
+from potmill.lammps import lammps
+from potmill.fake_vasp import fake_vasp
+from potmill.fit import fit
+from potmill.pareto import pareto
+from potmill.pops import pops
 import flux
 import concurrent.futures
 import flux.job

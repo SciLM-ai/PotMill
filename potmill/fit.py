@@ -90,7 +90,7 @@ def fit(features_directory, feature_names, vasp_IDs_ready_for_fit, hyperparamete
     import os
     import numpy as np
     import pandas as pd
-    from autopiad.tools import rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
+    from potmill.tools import rcuts_to_string, nmaxes_to_string, lmaxes_to_string, twojmaxes_to_string
 
     # Block-allocated fitting workers have a fixed CWD; chdir to this fit's directory so
     # results.csv and the beta files land in the right per-fit folder (mirrors uma()).
@@ -358,7 +358,7 @@ def _write_results(fit_dir, mlip, hyperparameters, fold, res):
     """Append one fold's row to results.csv and write its beta file. Identical format/columns
     to the original fit() so pareto.py's contract is preserved."""
     import numpy as np
-    from autopiad.tools import rcuts_to_string, nmaxes_to_string, twojmaxes_to_string, lmaxes_to_string
+    from potmill.tools import rcuts_to_string, nmaxes_to_string, twojmaxes_to_string, lmaxes_to_string
     if mlip == "ACE":
         rcuts, nmaxes, lmaxes, eweight = hyperparameters
     elif mlip == "SNAP":
@@ -400,7 +400,7 @@ def foldfit(features_directory, feature_names, b_dependency, subset_hp, eweight_
     import numpy as np
     import pandas as pd
     import torch
-    from autopiad.tools import rcuts_to_string, hyperparameters_to_string
+    from potmill.tools import rcuts_to_string, hyperparameters_to_string
 
     dtype = torch.float64
     rcut = subset_hp[0]
