@@ -26,6 +26,7 @@ dependencies = [
     "mendeleev",
     "jax",
     "executorlib",
+    "SubDataPy",
 ]
 
 [project.optional-dependencies]
