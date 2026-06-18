@@ -1,13 +1,11 @@
 import os
 import pickle
 import random
-import tempfile
 import traceback
 
 import ase.build
 import numpy as np
 from ase.calculators.lammpslib import LAMMPSlib
-from ase.io import write
 from ase.optimize.bfgslinesearch import BFGSLineSearch
 
 from potmill.structuregen.calculator import (
@@ -27,6 +25,37 @@ from potmill.structuregen.lammps_utils import (
 from potmill.structuregen.model import CNManager, CNModel
 from potmill.structuregen.renorm import _check_distances_binary, _check_distances_multi
 from potmill.structuregen.samplers import BinaryRadiusSampler, MendeleevUniformRadiusSampler
+
+
+def _append_descriptor_record(fpath, d):
+    """Append one accepted descriptor to a per-worker append-only file as a length-prefixed record:
+    8-byte little-endian uint64 row count (n_atoms), then the (n_atoms, n_descriptors) float64 array.
+    One file per worker (not one per config) and no new inodes per accept."""
+    d = np.ascontiguousarray(d, dtype="<f8")
+    with open(fpath, "ab") as f:
+        f.write(np.array(d.shape[0], dtype="<u8").tobytes())
+        f.write(d.tobytes())
+
+
+def _read_descriptor_records(fpath, offset, n_descriptors):
+    """Read COMPLETE descriptor records from ``fpath`` starting at byte ``offset``. Returns
+    ``(records, new_offset)``; a torn tail (peer mid-append) is left unconsumed so ``new_offset``
+    only advances past whole records (retried next sync). Inverse of _append_descriptor_record."""
+    records = []
+    with open(fpath, "rb") as f:
+        f.seek(offset)
+        while True:
+            prefix = f.read(8)
+            if len(prefix) < 8:
+                break
+            n_atoms = int(np.frombuffer(prefix, dtype="<u8")[0])
+            nbytes = n_atoms * n_descriptors * 8
+            payload = f.read(nbytes)
+            if len(payload) < nbytes:
+                break
+            records.append(np.frombuffer(payload, dtype="<f8").reshape(n_atoms, n_descriptors))
+            offset += 8 + nbytes
+    return records, offset
 
 
 class EntropyMaximizer:
@@ -75,7 +104,7 @@ class EntropyMaximizer:
         # Shared state for parallel workers
         self._worker_id = config.get("_worker_id", 0)
         self.shared_descriptor_dir = config.get("shared_descriptor_dir", None)
-        self._seen_descriptor_files = set()
+        self._desc_offsets = {}  # per-peer byte offset already consumed from desc_{worker}.bin
 
         # Load renormalization data from Phase 1
         random_manager = pickle.load(open("random-manager.p", "rb"))
@@ -311,7 +340,6 @@ class EntropyMaximizer:
                 self.min_dist_cross,
             )
 
-            file_name = f"configs/POSCAR_{n_atoms}_{self.i_accept}"
             accepted = False
 
             if len(self.manager.data) <= 10 and dists_cond:
@@ -338,7 +366,6 @@ class EntropyMaximizer:
                 self._save_to_shared(d)
                 self.current_cond, self.current_det = self.manager.evaluate()
                 print("***ACCEPTED:", self.current_cond, self.current_det, flush=True)
-                write(file_name, atoms)
                 atoms.calc = None
                 yield atoms
                 self.i_accept += 1
@@ -486,9 +513,6 @@ class EntropyMaximizer:
                 atoms.set_chemical_symbols(remapped_species)
                 atoms = ase.build.sort(atoms)
 
-                file_name = f"configs/POSCAR_{n_atoms}_{self.i_accept}"
-                write(file_name, atoms, format="vasp")
-
                 atoms.calc = None
                 yield atoms
                 self.i_accept += 1
@@ -504,40 +528,34 @@ class EntropyMaximizer:
             traceback.print_exc()
 
     def _sync_from_shared(self):
-        """Load new descriptors from other workers' shared files."""
+        """Accumulate new descriptors broadcast by other workers. Each peer appends to its own
+        desc_{worker}.bin; we track how many bytes we've consumed per peer and read only the new
+        complete records (the glob is over ~n_workers files, not one file per config)."""
         if not self.shared_descriptor_dir:
             return
         import glob
 
-        files = set(glob.glob(os.path.join(self.shared_descriptor_dir, "d_*.npy")))
-        new_files = files - self._seen_descriptor_files
-        if not new_files:
-            return
-        for fpath in sorted(new_files):
-            basename = os.path.basename(fpath)
-            file_worker_id = int(basename.split("_")[1])
-            if file_worker_id == self._worker_id:
-                self._seen_descriptor_files.add(fpath)
+        n_descriptors = self.manager.n_descriptors
+        for fpath in glob.glob(os.path.join(self.shared_descriptor_dir, "desc_*.bin")):
+            worker_id = int(os.path.basename(fpath).split("_")[1].split(".")[0])
+            if worker_id == self._worker_id:
                 continue
-            try:
-                d = np.load(fpath)
+            offset = self._desc_offsets.get(fpath, 0)
+            if os.path.getsize(fpath) <= offset:
+                continue
+            records, self._desc_offsets[fpath] = _read_descriptor_records(
+                fpath, offset, n_descriptors
+            )
+            for d in records:
                 self.manager.update(d)
-            except Exception:
-                # File may be partially written by another worker; skip and retry next sync
-                continue
-            self._seen_descriptor_files.add(fpath)
 
     def _save_to_shared(self, d):
-        """Save accepted descriptor to shared directory via atomic rename."""
+        """Broadcast an accepted descriptor to peers by appending it to this worker's shared file."""
         if not self.shared_descriptor_dir:
             return
-        fname = f"d_{self._worker_id}_{self.i_accept}.npy"
-        fpath = os.path.join(self.shared_descriptor_dir, fname)
-        # Write to temp file then rename for atomicity (prevents partial reads)
-        fd, tmp_path = tempfile.mkstemp(dir=self.shared_descriptor_dir, suffix=".npy")
-        os.close(fd)
-        np.save(tmp_path, d)
-        os.rename(tmp_path, fpath)
+        _append_descriptor_record(
+            os.path.join(self.shared_descriptor_dir, f"desc_{self._worker_id}.bin"), d
+        )
 
     def _adapt_K(self):
         """Adapt the entropy strength parameter K based on rejection statistics.

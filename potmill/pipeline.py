@@ -5,6 +5,8 @@ import concurrent.futures
 import os
 import shutil
 
+from potmill.bfile import write_b_batch
+
 STAGES = (
     "entropy",
     "labeling",
@@ -86,22 +88,25 @@ def next_atoms_from_entropy(entropy_iterator, job_id=None):
 
 
 def combine_b(start_path, labeling_results, labeling_IDs_ready_for_fit, batch_idx):
-    """Concatenate this batch's per-config b files into the cumulative b{N}.csv (for the row engine)
-    and a per-batch b_batch.csv (row-aligned with features/{batch_idx}/<rcut>/a.npy for foldfit)."""
+    """Build this batch's b_batch.csv from the in-memory labeling targets (row-aligned with
+    features/{batch_idx}/<rcut>/a.npy for foldfit) and append it to the cumulative b{N}.csv (for the
+    row engine). No per-config b files are read -- the targets travel in the labeling result dicts."""
     # Batched labeling (label_batch_size>1) returns a list per task, so exe.batched yields a
     # list-of-lists; flatten back to a flat list of result dicts.
     if labeling_results and isinstance(labeling_results[0], list):
         labeling_results = [item for sublist in labeling_results for item in sublist]
     labeling_IDs_finished = [r["job_ID"] for r in labeling_results]
     print("Starting b.csv file preparation for the fit...", flush=True)
-    new_b_files = " ".join(f"{job_id}/b" for job_id in labeling_IDs_finished)
     new_ready = labeling_IDs_ready_for_fit + labeling_IDs_finished
     len1, len2 = len(labeling_IDs_ready_for_fit), len(new_ready)
-    os.system(
-        f"cat {start_path}features/b{len1}.csv {new_b_files} > {start_path}features/b{len2}.csv"
-    )
     os.makedirs(f"{start_path}features/{batch_idx}", exist_ok=True)
-    os.system(f"cat {new_b_files} > {start_path}features/{batch_idx}/b_batch.csv")
+    write_b_batch(
+        f"{start_path}features/{batch_idx}/b_batch.csv", [r["b_rows"] for r in labeling_results]
+    )
+    os.system(
+        f"cat {start_path}features/b{len1}.csv {start_path}features/{batch_idx}/b_batch.csv "
+        f"> {start_path}features/b{len2}.csv"
+    )
     return new_ready
 
 

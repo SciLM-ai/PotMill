@@ -62,7 +62,6 @@ potmill/
     uma.py             # UMA (fairchem) backend, configured via [FAIRChemCalculator]
     vasp.py            # VASP backend, configured via [Vasp]
     lammps.py          # LAMMPS backend, configured via [LAMMPS]
-    fake.py            # Mock labeling for testing
   featurization/       # FitSNAP ACE/SNAP featurization
   fitting/             # Least-squares fitting (fit.py, foldfit) + POPSRegression UQ (pops.py)
   analysis/            # Pareto front (pareto.py) + monitor plotting (plot_monitor.py)

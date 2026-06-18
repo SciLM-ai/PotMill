@@ -3,9 +3,11 @@
 import os
 
 from ase import Atoms
-from ase.io import read, write
+from ase.calculators.singlepoint import SinglePointCalculator
+from ase.io import read
+from ase.io.trajectory import Trajectory
 
-from potmill.bfile import write_b
+from potmill.bfile import b_rows
 
 
 def make_init_uma_calculator(kwargs):
@@ -38,7 +40,6 @@ def make_init_uma_predictor(kwargs):
 
 
 def uma(start_path, input_file, job_id, dirpath, calc):
-    os.chdir(dirpath)
     atoms = (
         input_file
         if isinstance(input_file, Atoms)
@@ -47,11 +48,16 @@ def uma(start_path, input_file, job_id, dirpath, calc):
     atoms.pbc = True
     atoms.calc = calc
 
-    write_b("b", job_id, atoms.get_potential_energy(), len(atoms), atoms.get_forces())
-    write(f"atoms_{job_id}.traj", images=atoms, format="traj")
+    energy, forces = atoms.get_potential_energy(), atoms.get_forces()
+    rows = b_rows(job_id, energy, len(atoms), forces)
+    # Keep labeled structures as one trajectory per worker (appended), not one file per config.
+    atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
+    traj = Trajectory(f"labeled_{os.getpid()}.traj", "a")
+    traj.write(atoms)
+    traj.close()
 
     atoms.calc = None
-    return {"job_ID": job_id, "atoms": atoms}
+    return {"job_ID": job_id, "b_rows": rows, "atoms": atoms}
 
 
 def uma_batch(start_path, atoms_list, job_ids, labeling_dir, predictor, task_name="omat"):
@@ -74,16 +80,23 @@ def uma_batch(start_path, atoms_list, job_ids, labeling_dir, predictor, task_nam
     energies = preds["energy"].detach().cpu().numpy()
     forces = preds["forces"].detach().cpu().numpy()
 
-    results = []
+    results, labeled = [], []
     offset = 0
     for i, (atoms, job_id) in enumerate(zip(resolved, job_ids, strict=False)):
         n_atoms = len(atoms)
         f = forces[offset : offset + n_atoms]
         offset += n_atoms
-        dirpath = f"{labeling_dir}/{job_id}/"
-        os.makedirs(dirpath, exist_ok=True)
-        write_b(f"{dirpath}/b", job_id, float(energies[i]), n_atoms, f)
-        write(f"{dirpath}/atoms_{job_id}.traj", images=atoms, format="traj")
+        energy = float(energies[i])
+        rows = b_rows(job_id, energy, n_atoms, f)
+        atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=f)
+        labeled.append(atoms)
+        results.append({"job_ID": job_id, "b_rows": rows, "atoms": atoms})
+
+    # One labeled trajectory per worker (appended across this worker's batches), not per config.
+    traj = Trajectory(f"{labeling_dir}/labeled_{os.getpid()}.traj", "a")
+    for atoms in labeled:
+        traj.write(atoms)
+    traj.close()
+    for atoms in labeled:
         atoms.calc = None
-        results.append({"job_ID": job_id, "atoms": atoms})
     return results

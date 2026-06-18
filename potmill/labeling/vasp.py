@@ -13,7 +13,7 @@ from ase import Atoms
 from ase.calculators.vasp import Vasp
 from ase.io import read, write
 
-from potmill.bfile import write_b
+from potmill.bfile import b_rows, write_b
 
 
 def make_init_vasp(config):
@@ -27,6 +27,7 @@ def make_init_vasp(config):
 
 
 def vasp(start_path, input_file, job_id, dirpath, vasp_kwargs):
+    os.makedirs(dirpath, exist_ok=True)
     os.chdir(dirpath)
     kwargs = dict(vasp_kwargs)
     pp_path = kwargs.pop("pp_path", None)
@@ -45,9 +46,12 @@ def vasp(start_path, input_file, job_id, dirpath, vasp_kwargs):
     atoms.pbc = True
     print("RUN DIRECTORY: ", os.getcwd(), " INPUT FILE: ", input_file, flush=True)
 
+    rows = None
     try:
         atoms.calc = Vasp(**kwargs)
-        write_b("b", job_id, atoms.get_potential_energy(), len(atoms), atoms.get_forces())
+        energy, forces = atoms.get_potential_energy(), atoms.get_forces()
+        rows = b_rows(job_id, energy, len(atoms), forces)
+        write_b("b", job_id, energy, len(atoms), forces)
         write(f"atoms_{job_id}.traj", images=atoms, format="traj")
         convert_xml_to_jason("vasprun.xml", "atoms_%i_" % job_id)
         _cleanup_vasp_files(job_id)
@@ -56,7 +60,7 @@ def vasp(start_path, input_file, job_id, dirpath, vasp_kwargs):
         traceback.print_exc()
 
     atoms.calc = None
-    return {"job_ID": job_id, "atoms": atoms}
+    return {"job_ID": job_id, "b_rows": rows, "atoms": atoms}
 
 
 def _cleanup_vasp_files(job_id):

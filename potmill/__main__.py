@@ -229,8 +229,9 @@ def main():
                                 # Per-config path: one label task per entropy future. The backend's calc /
                                 # kwargs are injected by executorlib from its init_function.
                                 for i, entropy_atoms in enumerate(entropy_atoms_futures):
+                                    # VASP/LAMMPS create this per-config dir themselves; UMA writes
+                                    # no per-config files, so we no longer pre-create it here.
                                     labeling_directory = f"{start_path}labeling/{i}/"
-                                    os.makedirs(labeling_directory, exist_ok=True)
                                     fs = labeling_exe.submit(
                                         labeling.per_config,
                                         start_path,

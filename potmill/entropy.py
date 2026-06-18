@@ -21,7 +21,6 @@ def max_entropy_atoms_iterator(structuregen_config):
     from potmill.structuregen.renorm import RandomEntropyInitializer
 
     os.makedirs("renorm_configs", exist_ok=True)
-    os.makedirs("configs", exist_ok=True)
 
     worker_id = structuregen_config.get("_worker_id", 0)
     shared_dir = structuregen_config.get("shared_state_dir", None)

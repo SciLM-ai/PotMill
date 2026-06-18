@@ -14,17 +14,29 @@ import numpy as np
 import pandas as pd
 
 
-def write_b(path, job_id, energy, n_atoms, forces):
-    """Write one configuration's targets to ``path`` (see module docstring)."""
+def b_rows(job_id, energy, n_atoms, forces):
+    """Build one configuration's target rows (see module docstring) as an (1+3*n_atoms, 3) array."""
     forces = np.asarray(forces).ravel()
-    rows = np.vstack(
+    return np.vstack(
         [
             np.arange(0, 1 + forces.size),
             np.full(1 + forces.size, job_id),
             np.concatenate([[energy / n_atoms], forces]),
         ]
     ).T
-    np.savetxt(path, rows, delimiter=",", fmt=["%i", "%i", "%.10f"])
+
+
+def write_b(path, job_id, energy, n_atoms, forces):
+    """Write one configuration's targets to ``path`` (see module docstring)."""
+    np.savetxt(
+        path, b_rows(job_id, energy, n_atoms, forces), delimiter=",", fmt=["%i", "%i", "%.10f"]
+    )
+
+
+def write_b_batch(path, rows_list):
+    """Write a batch of configurations' targets (a list of ``b_rows`` arrays) to ``path`` in one file.
+    Byte-identical to concatenating the per-config ``write_b`` outputs (same fmt and row order)."""
+    np.savetxt(path, np.vstack(rows_list), delimiter=",", fmt=["%i", "%i", "%.10f"])
 
 
 def read_b(path):
