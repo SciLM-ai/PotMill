@@ -131,10 +131,9 @@ def fit(
         twojmaxes_to_string,
     )
 
-    # Block-allocated fitting workers have a fixed CWD; chdir to this fit's directory so
-    # results.csv and the beta files land in the right per-fit folder (mirrors uma()).
-    if fit_directory is not None:
-        os.chdir(fit_directory)
+    # Results + betas are appended to per-worker containers in the batch dir (the parent of the
+    # per-combo fit_directory that __main__ still passes); no per-combo folder or chdir needed.
+    batch_dir = os.path.dirname(fit_directory) if fit_directory else "."
 
     if mlip == "ACE":
         rcuts, nmaxes, lmaxes, eweight = hyperparameters
@@ -249,7 +248,7 @@ def fit(
         print("Force training RMSE is", res["tr_F"], flush=True)
         print("Energy testing RMSE is", res["te_E"], flush=True)
         print("Force testing RMSE is", res["te_F"], flush=True)
-        _write_results(".", mlip, hyperparameters, fold, res)
+        _write_results(batch_dir, mlip, hyperparameters, fold, res)
 
     return hyperparameters
 
@@ -389,12 +388,51 @@ def _load_states(path, p, device, dtype):
     return [_FoldState.from_blob(b, p, device, dtype) for b in blob]
 
 
-def _write_results(fit_dir, mlip, hyperparameters, fold, res):
-    """Append one fold's row to results.csv and write its beta file. Identical format/columns
-    to the original fit() so pareto.py's contract is preserved."""
+def _append_beta(bin_path, beta):
+    """Append a fitted beta as one length-prefixed binary record (8-byte little-endian uint64 byte
+    count, then the float64 coefficients). Returns the record's start offset (for the .idx)."""
+    import os
+
     import numpy as np
 
+    b = np.ascontiguousarray(beta, dtype="<f8")
+    offset = os.path.getsize(bin_path) if os.path.exists(bin_path) else 0
+    with open(bin_path, "ab") as f:
+        f.write(np.array(b.nbytes, dtype="<u8").tobytes())
+        f.write(b.tobytes())
+    return offset
+
+
+def read_beta(batch_dir, combo_string, fold):
+    """Extract a fitted beta from the per-worker fit containers in a fits/{batch}/ dir -- the inverse
+    of the betas_{pid}.bin/.idx that _write_results appends. For users / UQ; the pipeline itself
+    never reads betas, so nothing else depends on this."""
+    import glob
+    import os
+
+    import numpy as np
+
+    for idx_path in glob.glob(os.path.join(batch_dir, "betas_*.idx")):
+        with open(idx_path) as f:
+            for line in f:
+                cs, fld, off = line.rstrip("\n").rsplit(",", 2)
+                if cs == combo_string and int(fld) == fold:
+                    with open(idx_path[:-4] + ".bin", "rb") as bf:
+                        bf.seek(int(off))
+                        nbytes = int(np.frombuffer(bf.read(8), dtype="<u8")[0])
+                        return np.frombuffer(bf.read(nbytes), dtype="<f8")
+    raise KeyError(f"beta not found for {combo_string} fold {fold} in {batch_dir}")
+
+
+def _write_results(batch_dir, mlip, hyperparameters, fold, res):
+    """Append one fold's result row + fitted beta to this worker's per-batch fit containers in
+    batch_dir: results_{pid}.csv (row content byte-identical to the old per-combo results.csv, so
+    pareto's column contract is preserved) and betas_{pid}.bin/.idx -- one set of files per worker
+    per batch instead of one folder per combo."""
+    import os
+
     from potmill.tools import (
+        hyperparameters_to_string,
         lmaxes_to_string,
         nmaxes_to_string,
         rcuts_to_string,
@@ -405,54 +443,44 @@ def _write_results(fit_dir, mlip, hyperparameters, fold, res):
         rcuts, nmaxes, lmaxes, eweight = hyperparameters
     elif mlip == "SNAP":
         rcuts, twojmaxes, eweight = hyperparameters
-    with open(f"{fit_dir}/results.csv", "a") as file:
-        if mlip == "ACE":
-            results_line = (
-                "%i," % fold
-                + rcuts_to_string(rcuts, delimiter=",")
-                + ","
-                + nmaxes_to_string(nmaxes, delimiter=",")
-                + ","
-                + lmaxes_to_string(lmaxes, delimiter=",")
-            )
-        elif mlip == "SNAP":
-            results_line = (
-                "%i," % fold
-                + rcuts_to_string(rcuts, delimiter=",")
-                + ","
-                + twojmaxes_to_string(twojmaxes, delimiter=",")
-            )
-        results_line += (
-            ",{:.3f},{:.10f},{:.10f},{:.10f},{:.10f},{:.10f},{:.10f},{:.10f},{:.10f}\n".format(
-                eweight,
-                res["tr_E"],
-                res["tr_F"],
-                res["te_E"],
-                res["te_F"],
-                res["tr_E_w"],
-                res["tr_F_w"],
-                res["te_E_w"],
-                res["te_F_w"],
-            )
-        )
-        file.write(results_line)
 
-    beta_filename = "pot__rcut_" + rcuts_to_string(rcuts, delimiter="_")
     if mlip == "ACE":
-        beta_filename += (
-            "__nmax_"
-            + nmaxes_to_string(nmaxes, delimiter="_")
-            + "__lmax_"
-            + lmaxes_to_string(lmaxes, delimiter="_")
-            + "__eweight_%.3f__fold_%i.csv" % (eweight, fold)
+        results_line = (
+            "%i," % fold
+            + rcuts_to_string(rcuts, delimiter=",")
+            + ","
+            + nmaxes_to_string(nmaxes, delimiter=",")
+            + ","
+            + lmaxes_to_string(lmaxes, delimiter=",")
         )
     elif mlip == "SNAP":
-        beta_filename += (
-            "__2jmax_"
-            + twojmaxes_to_string(twojmaxes, delimiter="_")
-            + "__eweight_%.3f__fold_%i.csv" % (eweight, fold)
+        results_line = (
+            "%i," % fold
+            + rcuts_to_string(rcuts, delimiter=",")
+            + ","
+            + twojmaxes_to_string(twojmaxes, delimiter=",")
         )
-    np.savetxt(f"{fit_dir}/{beta_filename}", res["beta"])
+    results_line += (
+        ",{:.3f},{:.10f},{:.10f},{:.10f},{:.10f},{:.10f},{:.10f},{:.10f},{:.10f}\n".format(
+            eweight,
+            res["tr_E"],
+            res["tr_F"],
+            res["te_E"],
+            res["te_F"],
+            res["tr_E_w"],
+            res["tr_F_w"],
+            res["te_E_w"],
+            res["te_F_w"],
+        )
+    )
+    pid = os.getpid()
+    with open(f"{batch_dir}/results_{pid}.csv", "a") as file:
+        file.write(results_line)
+
+    combo_string = hyperparameters_to_string(mlip, hyperparameters, delimiter="_")
+    offset = _append_beta(f"{batch_dir}/betas_{pid}.bin", res["beta"])
+    with open(f"{batch_dir}/betas_{pid}.idx", "a") as f:
+        f.write(f"{combo_string},{fold},{offset}\n")
 
 
 def foldfit(
@@ -485,7 +513,7 @@ def foldfit(
     import pandas as pd
     import torch
 
-    from potmill.tools import hyperparameters_to_string, rcuts_to_string
+    from potmill.tools import rcuts_to_string
 
     dtype = torch.float64
     rcut = subset_hp[0]
@@ -523,12 +551,10 @@ def foldfit(
     new_path = f"{state_dir}/state.pt"
     _save_states(states, new_path)
 
-    # ---- solve + RMSE for every (eweight, fold), write results.csv + beta ----
+    # ---- solve + RMSE for every (eweight, fold); append to this worker's per-batch containers ----
     for eweight in eweight_list:
-        hp = (subset_hp + [eweight]) if mlip == "ACE" else (subset_hp + [eweight])
-        fit_dir = fit_dir_base + hyperparameters_to_string(mlip, hp, delimiter="_")
-        os.makedirs(fit_dir, exist_ok=True)
+        hp = subset_hp + [eweight]
         for f in range(n_fold):
             res = states[f].solve_and_rmse(eweight, rcond)
-            _write_results(fit_dir, mlip, hp, f, res)
+            _write_results(fit_dir_base, mlip, hp, f, res)
     return new_path

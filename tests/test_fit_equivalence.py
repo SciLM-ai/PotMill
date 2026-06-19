@@ -65,7 +65,7 @@ class TestFitFoldfitEquivalence(unittest.TestCase):
                     mlip,
                     batch_ID=0,
                     n_fold=n_fold,
-                    fit_directory=fit_dir,
+                    fit_directory=os.path.join(fit_dir, "combo"),
                     fit_device="cpu",
                     fit_method="svd",
                 )
@@ -73,6 +73,7 @@ class TestFitFoldfitEquivalence(unittest.TestCase):
                 os.chdir(cwd)
 
             fold_base = os.path.join(root, "incr") + "/"
+            os.makedirs(fold_base, exist_ok=True)  # __main__ makes the per-batch fits/{i}/ dir
             state_dir = os.path.join(root, "state")
             foldfit(
                 feats,
@@ -90,8 +91,8 @@ class TestFitFoldfitEquivalence(unittest.TestCase):
                 fit_method="svd",
             )
 
-            rows_csv = np.loadtxt(os.path.join(fit_dir, "results.csv"), delimiter=",")
-            incr_csv = np.loadtxt(glob.glob(f"{fold_base}*/results.csv")[0], delimiter=",")
+            rows_csv = np.loadtxt(glob.glob(os.path.join(fit_dir, "results_*.csv"))[0], delimiter=",")
+            incr_csv = np.loadtxt(glob.glob(f"{fold_base}results_*.csv")[0], delimiter=",")
 
         rows_csv = rows_csv[rows_csv[:, 0].argsort()]
         incr_csv = incr_csv[incr_csv[:, 0].argsort()]

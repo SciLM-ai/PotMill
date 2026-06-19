@@ -6,45 +6,43 @@ def pareto(start_path, vasp_batch_idx, hyperparameters_list, hyperparameters_lis
 
     from potmill.tools import ace_hyperparameters_to_string, snap_hyperparameters_to_string
 
-    results_dirs = glob.glob(f"{start_path}fits/{vasp_batch_idx}/*")
-    results_df = pd.DataFrame()
-    for results_dir in results_dirs:
-        results_ = pd.read_csv(results_dir + "/results.csv", header=None)
-        # Column dims come from hyperparameters_list_noeweight (the resolved cost_futures) -- the
-        # eweight-free rcut/nmax/lmax (ACE) or rcut/twojmax (SNAP), engine-agnostic. The
-        # hyperparameters_list argument is only a dependency barrier (in the incremental engine it
-        # resolves to state-file paths, not hyperparameters, so it must NOT set the column structure).
-        columns_list = ["rcut" + str(i) for i in range(len(hyperparameters_list_noeweight[0][0]))]
-        if mlip == "ACE":
-            columns_list.extend(
-                ["nmax" + str(i + 1) for i in range(len(hyperparameters_list_noeweight[0][1]))]
-            )
-            columns_list.extend(
-                ["lmax" + str(i + 1) for i in range(len(hyperparameters_list_noeweight[0][2]))]
-            )
-        elif mlip == "SNAP":
-            columns_list.extend(
-                ["twojmax" + str(i) for i in range(len(hyperparameters_list_noeweight[0][1]))]
-            )
+    # Column dims come from hyperparameters_list_noeweight (the resolved cost_futures) -- the
+    # eweight-free rcut/nmax/lmax (ACE) or rcut/twojmax (SNAP), engine-agnostic. The
+    # hyperparameters_list argument is only a dependency barrier (in the incremental engine it
+    # resolves to state-file paths, not hyperparameters, so it must NOT set the column structure).
+    columns_list = ["rcut" + str(i) for i in range(len(hyperparameters_list_noeweight[0][0]))]
+    if mlip == "ACE":
         columns_list.extend(
-            [
-                "eweight",
-                "train_e_rmse",
-                "train_f_rmse",
-                "test_e_rmse",
-                "test_f_rmse",
-                "train_e_rmse_weighted",
-                "train_f_rmse_weighted",
-                "test_e_rmse_weighted",
-                "test_f_rmse_weighted",
-            ]
+            ["nmax" + str(i + 1) for i in range(len(hyperparameters_list_noeweight[0][1]))]
         )
-        results_df = pd.concat(
-            [
-                results_df,
-                pd.DataFrame(results_.mean().values[1:].reshape(1, -1), columns=columns_list),
-            ]
+        columns_list.extend(
+            ["lmax" + str(i + 1) for i in range(len(hyperparameters_list_noeweight[0][2]))]
         )
+    elif mlip == "SNAP":
+        columns_list.extend(
+            ["twojmax" + str(i) for i in range(len(hyperparameters_list_noeweight[0][1]))]
+        )
+    columns_list.extend(
+        [
+            "eweight",
+            "train_e_rmse",
+            "train_f_rmse",
+            "test_e_rmse",
+            "test_f_rmse",
+            "train_e_rmse_weighted",
+            "train_f_rmse_weighted",
+            "test_e_rmse_weighted",
+            "test_f_rmse_weighted",
+        ]
+    )
+
+    # Each fit worker appended its (fold + columns_list) rows to fits/{batch}/results_{pid}.csv (one
+    # set of files per worker, not one folder per combo). Group by combo -- everything except the 8
+    # RMSE columns -- and mean over the n_fold rows, reproducing the old per-combo results.csv mean.
+    results_files = glob.glob(f"{start_path}fits/{vasp_batch_idx}/results_*.csv")
+    all_rows = pd.concat([pd.read_csv(f, header=None) for f in results_files], ignore_index=True)
+    all_rows.columns = ["fold"] + columns_list
+    results_df = all_rows.groupby(columns_list[:-8], as_index=False)[columns_list[-8:]].mean()
 
     cost = pd.DataFrame()
     for i in range(len(hyperparameters_list_noeweight)):
