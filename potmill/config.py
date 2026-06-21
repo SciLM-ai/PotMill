@@ -36,17 +36,28 @@ class ConfigManager:
             "pops": 0,
             "nconfigurations": 1000,
             "batch_size": 1000,
+            # device drives the labeling + fitting executors: "cuda" = one GPU per job (today's
+            # behavior); "cpu" = cores per job (VASP/CPU). entropy + featurize are always CPU.
+            "device": "cuda",
         },
         "FitSNAP": {"mlip": "ACE", "chem_elem": None, "filename": "FitSNAP.in"},
-        "ourLabeling": {"calculator": "FAIRChemCalculator", "label_batch_size": 1},
-        "ourFeaturization": {"featurize_workers_per_node": 1, "ncores_per_featurization": 4},
+        # Per-stage layout uses one consistent scheme: <stage>_jobs_per_node + <stage>_cores_per_job.
+        # In cuda mode each labeling/fit job takes 1 GPU and cores_per_job is its CPU thread count;
+        # in cpu mode cores_per_job is the cores reserved for that job. (entropy_* live in the raw
+        # [ourStructureGen] section; defaults resolved in resources.worker_layout.)
+        "ourLabeling": {
+            "calculator": "FAIRChemCalculator",
+            "label_batch_size": 1,
+            "labeling_jobs_per_node": 1,
+            "labeling_cores_per_job": 1,
+        },
+        "ourFeaturization": {"featurize_jobs_per_node": 1, "featurize_cores_per_job": 4},
         "ourFit": {
-            "fit_gpus_per_node": 2,
-            "fit_device": "cuda",
+            "fit_jobs_per_node": 2,
             "fit_method": "svd",
             "n_fold": 3,
             "fit_engine": "incremental",
-            "ncores_per_fit": 1,
+            "fit_cores_per_job": 1,
         },
         "ourHyperparameters": {
             "min_rcut": 5.0,

@@ -148,7 +148,7 @@ The pipeline reads `config.ini` (parsed by `potmill.config.ConfigManager`). Sect
   (`[FAIRChemCalculator]`, `[Vasp]`, `[LAMMPS]`); omitted keys fall back to that library's defaults.
 
 The labeling backend is selected by `[ourLabeling] calculator` (`FAIRChemCalculator`, `Vasp`, or
-`LAMMPS`). Both labeling and fitting devices are configurable (`device` / `fit_device` = `cpu` or `cuda`).
+`LAMMPS`). A single `[Main] device` = `cpu` or `cuda` drives both labeling and fitting placement.
 
 See `examples/` for complete, runnable configs (`HBeW/ACE` is the multi-element UMA reference).
 

@@ -1,0 +1,51 @@
+[ACE]
+numTypes = 2
+mumax = 2
+type = W Be
+lambda = 1.5 1.5 1.5 1.5
+rcutfac = 4.5 4.5 4.5 4.5
+rcinner = 1.0 1.0 1.0 1.0
+drcinner = 0.01 0.01 0.01 0.01
+bzeroflag = 0
+ranks = 1 2
+lmin = 0 0
+lmax =  0 1
+nmax =  6 3
+nmaxbase = 22
+
+[CALCULATOR]
+calculator = LAMMPSPACE
+energy = 1
+force = 1
+stress = 0
+
+[ESHIFT]
+W = 0.0
+Be = 0.0
+
+[GROUPS]
+group_sections = name training_size testing_size eweight fweight vweight
+group_types = str float float float float float
+smartweights = 0
+random_sampling = 0
+All = 1.0    0.0    1.0      1.0     0.0
+
+[SOLVER]
+solver = SVD
+compute_testerrs = 1
+detailed_errors = 1
+
+[REFERENCE]
+units = metal
+atom_style = atomic
+pair_style = zero 6.6
+pair_coeff = * *
+
+[MEMORY]
+override = 0
+
+[SCRAPER]
+scraper = JSON
+
+[OUTFILE]
+output_style = PACE

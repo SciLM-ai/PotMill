@@ -57,8 +57,8 @@ def main():
     pops_mode = config["Main"]["pops"]
     nconfigurations = config["Main"]["nconfigurations"]
     batch_size = config["Main"]["batch_size"]
-    ncores_per_fit = config["ourFit"]["ncores_per_fit"]
-    fit_device = config["ourFit"]["fit_device"]
+    device = config["Main"]["device"]  # cuda | cpu -- drives labeling + fitting placement
+    fit_device = device
     fit_method = config["ourFit"]["fit_method"]
     n_fold = config["ourFit"]["n_fold"]  # k for k-fold CV (test = 1/n_fold)
     fit_engine = config["ourFit"]["fit_engine"]  # 'incremental' (R-collecting) | 'rows'
@@ -79,15 +79,15 @@ def main():
             f"has no batched path; set label_batch_size = 1"
         )
     print(
-        f"GPU split: {res.n_label_workers} labeling + {res.n_fit_workers} fitting workers "
-        f"({res.gpus_per_node}/node total) | fit_device={fit_device} fit_method={fit_method} "
-        f"| label_batch_size={label_batch_size}",
+        f"device={device} | {res.n_label_workers} labeling ({res.label_cores_per_job} cores/job) "
+        f"+ {res.n_fit_workers} fitting ({res.fit_cores_per_job} cores/job) workers "
+        f"| fit_method={fit_method} | label_batch_size={label_batch_size}",
         flush=True,
     )
 
     structuregen_config = config.get("ourStructureGen", {})
     structuregen_config.setdefault("elements", config["FitSNAP"]["chem_elem"])
-    structuregen_config["n_threads"] = res.threads_per_worker
+    structuregen_config["n_threads"] = res.entropy_cores_per_job
     if res.n_entropy_workers > 1 and structuregen_config.get("strict_entropy_decrease", 0):
         print(
             "WARNING: strict_entropy_decrease forced to 0 for parallel entropy workers", flush=True
@@ -128,12 +128,39 @@ def main():
     pareto_futures = []
     pops_futures = []
 
-    ncores_per_featurization = config["ourFeaturization"]["ncores_per_featurization"]
+    featurize_cores_per_job = res.featurize_cores_per_job
     print(
         f"Featurize: {res.n_featurize_workers} workers ({res.n_featurize_workers // nnodes}/node) "
-        f"x {ncores_per_featurization} cores",
+        f"x {featurize_cores_per_job} cores",
         flush=True,
     )
+
+    # Device-aware resource_dicts for the labeling + fitting executors. cuda: one GPU per job (the
+    # job's MPI/threads run on that GPU). cpu: a single Python process given cores_per_job cores --
+    # VASP launches its own MPI inside the command; torch fitting uses cores_per_job threads.
+    if device == "cuda":
+        labeling_resource_dict = {"cores": 1, "gpus_per_core": 1, "num_nodes": 1}
+        fitting_resource_dict = {
+            "cores": 1,
+            "threads_per_core": res.fit_cores_per_job,
+            "gpus_per_core": 1,
+            "num_nodes": 1,
+        }
+    else:  # cpu
+        # VASP labeling worker is a lightweight Python process (1 core); the [Vasp] `command`
+        # launches VASP with `flux run -n <labeling_cores_per_job> -o cpu-affinity=per-task ...`,
+        # which grabs that many cores from the flux instance and schedules the concurrent VASP
+        # jobs on disjoint cores (verified by the probe). So we do NOT reserve label cores here.
+        labeling_resource_dict = {"cores": 1, "gpus_per_core": 0, "num_nodes": 1}
+        # Fitting is in-process torch on CPU: 1 core with fit_cores_per_job threads.
+        fitting_resource_dict = {
+            "cores": 1,
+            "threads_per_core": res.fit_cores_per_job,
+            "gpus_per_core": 0,
+            "num_nodes": 1,
+        }
+    labeling_resource_dict.update({"cwd": start_path + "labeling", "error_log_file": "error.out"})
+    fitting_resource_dict.update({"cwd": start_path + "fits", "error_log_file": "error.out"})
 
     with monitor, flux.job.FluxExecutor() as flux_executor:
         with (
@@ -148,7 +175,7 @@ def main():
                     "cores": 1,
                     "gpus_per_core": 0,
                     "num_nodes": 1,
-                    "threads_per_core": res.threads_per_worker,
+                    "threads_per_core": res.entropy_cores_per_job,
                     "cwd": start_path + "entropy",
                     "error_log_file": "error.out",
                 },
@@ -161,13 +188,7 @@ def main():
                 block_allocation=True,
                 init_function=labeling.init_function,
                 restart_limit=3,
-                resource_dict={
-                    "cores": 1,
-                    "gpus_per_core": 1,
-                    "num_nodes": 1,
-                    "cwd": start_path + "labeling",
-                    "error_log_file": "error.out",
-                },
+                resource_dict=labeling_resource_dict,
             ) as labeling_exe:
                 with FluxJobExecutor(
                     flux_log_files=True,
@@ -177,7 +198,7 @@ def main():
                     init_function=init_featurize,
                     restart_limit=3,
                     resource_dict={
-                        "cores": ncores_per_featurization,
+                        "cores": featurize_cores_per_job,
                         "gpus_per_core": 0,
                         "num_nodes": 1,
                         "cwd": start_path + "features",
@@ -192,14 +213,7 @@ def main():
                             block_allocation=True,
                             init_function=init_fit,
                             restart_limit=3,
-                            resource_dict={
-                                "cores": 1,
-                                "threads_per_core": ncores_per_fit,
-                                "gpus_per_core": 1,
-                                "num_nodes": 1,
-                                "cwd": start_path + "fits",
-                                "error_log_file": "error.out",
-                            },
+                            resource_dict=fitting_resource_dict,
                         ) as fitting_exe,
                         FluxJobExecutor(flux_log_files=True, flux_executor=flux_executor) as exe,
                     ):
@@ -459,7 +473,7 @@ def main():
                                     n_fold=n_fold,
                                     resource_dict={
                                         "cores": 1,
-                                        "threads_per_core": ncores_per_fit,
+                                        "threads_per_core": res.fit_cores_per_job,
                                         "gpus_per_core": 0,
                                         "num_nodes": 1,
                                         "cwd": pops_directory,
@@ -536,15 +550,18 @@ def main():
                                     print(
                                         "LABELING EXECUTOR SHUT DOWN - resources freed", flush=True
                                     )
-                                    # Take over the just-freed labeling GPUs for fitting (dynamic max_workers on
-                                    # block-allocated executors). Roughly halves the fit tail.
+                                    # Take over the just-freed labeling resources (GPUs in cuda mode,
+                                    # cores in cpu mode) for fitting via dynamic max_workers on the
+                                    # block-allocated executor. Roughly halves the fit tail. Safe on
+                                    # cpu because fit_cores_per_job <= labeling_cores_per_job, so the
+                                    # added fit workers fit inside the cores labeling just released.
                                     if fit_mode:
                                         fitting_exe.max_workers = (
                                             res.n_fit_workers + res.n_label_workers
                                         )
                                         print(
                                             f"FITTING expanded to {res.n_fit_workers + res.n_label_workers} workers "
-                                            f"(claimed labeling GPUs)",
+                                            f"(claimed freed labeling resources)",
                                             flush=True,
                                         )
 

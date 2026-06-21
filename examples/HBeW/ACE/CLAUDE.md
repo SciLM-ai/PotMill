@@ -21,7 +21,7 @@ The **binary** method (used for 2-element systems like W-Re) assigns one LAMMPS 
 - `config.ini` - Pipeline configuration matching the proven 100k 4rcut run (1h 42m wall on 4 GPU nodes, 0 errors):
   - `nconfigurations = 100000`, `batch_size = 1000` (configs per combine_b)
   - `label_batch_size = 20` (configs per UMA forward, amortizes the ~160 ms fixed forward overhead)
-  - `fit_gpus_per_node = 3` (1 UMA labeling GPU + 3 GPU fit workers per node)
+  - `device = cuda`, `labeling_jobs_per_node = 1` + `fit_jobs_per_node = 3` (1 UMA labeling GPU + 3 GPU fit workers per node)
   - `fit_engine = incremental` (R-collecting QR/SVD, O(N) memory in number of batches)
   - Hyperparameter grid: 4 rcuts (5.0-6.5), nmax 5-9 / 2-4, lmax 0 / 1-4, 5 eweights
 - `FitSNAP.in` - FitSNAP ACE configuration for 3 elements (9 bond types). `pair_style = zero 6.6` >= `max_rcut`.

@@ -95,6 +95,10 @@ def combine_b(start_path, labeling_results, labeling_IDs_ready_for_fit, batch_id
     # list-of-lists; flatten back to a flat list of result dicts.
     if labeling_results and isinstance(labeling_results[0], list):
         labeling_results = [item for sublist in labeling_results for item in sublist]
+    # Drop configs whose VASP/labeling failed (b_rows is None) so a partial batch still yields a
+    # training set on the survivors instead of crashing np.vstack. featurize filters identically, so
+    # b_batch.csv stays row-aligned with the descriptor matrix a.npy.
+    labeling_results = [r for r in labeling_results if r.get("b_rows") is not None]
     labeling_IDs_finished = [r["job_ID"] for r in labeling_results]
     print("Starting b.csv file preparation for the fit...", flush=True)
     new_ready = labeling_IDs_ready_for_fit + labeling_IDs_finished

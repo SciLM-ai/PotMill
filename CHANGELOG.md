@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — CPU + VASP full-pipeline path
+
+- Added a `[Main] device = cuda | cpu` switch and a uniform per-stage layout scheme
+  (`<stage>_jobs_per_node` + `<stage>_cores_per_job` for entropy/labeling/featurize/fit), replacing
+  the GPU-only knobs (`fit_gpus_per_node`, `featurize_workers_per_node`, `n_entropy_workers`,
+  `ncores_per_*`, `fit_device`). `resources.worker_layout` is now device-aware: cuda keeps the
+  GPU-per-job behavior; cpu budgets cores per node and leaves cores free for the dynamic executor
+  (combine_b/cost/pareto) so no stage stalls. Strict entropy auto-runs as a single serial worker.
+- VASP labeling backend now applies the `vasp-ase-sp.py` single-point DFT settings as overridable
+  defaults (encut 500, ismear 0, ediff 1e-6, kspacing 0.125, prec Accurate, ...), sets per-atom
+  MAGMOMs for any element (unless `ispin = 1`), parses `setups` from a string, and rejoins a
+  spaced `command`. The incremental R-collecting fit runs unchanged on CPU (`device = cpu`).
+- Added the `examples/WBe/CPU_Vasp` example (Cray-MPICH `vasp_std_pm_cpu_01`, launched flux-natively
+  with `flux run -n N -o cpu-affinity=per-task`; 4 VASP jobs/node x 24 cores; `m4884` CPU sbatch).
+- Migrated the `HBeW`/`WRe` GPU examples and the unit tests to the new schema (GPU behavior unchanged).
+
 ## Unreleased — cleanup & modularization for release
 
 - Removed the dead/broken `unary.py` entry point and the legacy `binary_entropy`/`multi_element_entropy`

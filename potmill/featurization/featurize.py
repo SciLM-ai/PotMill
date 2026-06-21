@@ -50,7 +50,11 @@ def featurize(
         if atoms_traj and isinstance(atoms_traj[0], list):
             atoms_traj = [item for sublist in atoms_traj for item in sublist]
         if isinstance(atoms_traj[0], dict):
-            atoms_traj = [atoms["atoms"] for atoms in atoms_traj]
+            # Keep only successfully-labeled configs (b_rows not None). A failed VASP still carries
+            # geometry, so featurizing it would shift the descriptor rows out of alignment with
+            # combine_b's b_batch.csv (which filters identically). Both consume the same batched
+            # future in the same order, so this keeps a.npy and b_batch.csv row-aligned.
+            atoms_traj = [r["atoms"] for r in atoms_traj if r.get("b_rows") is not None]
 
     # cost is only a featurization-TIMING probe for the Pareto cost axis -- it does not need the whole
     # batch. Cap it at cost_nstructures (set in __main__) so the one-per-subset cost tasks finish in

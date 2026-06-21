@@ -23,9 +23,10 @@ class TestConfigManager(unittest.TestCase):
             cfg = ConfigManager(path)
         # user override coerced to int
         self.assertEqual(cfg["Main"]["nconfigurations"], 500)
-        # default applied for an omitted key
-        self.assertEqual(cfg["ourFit"]["fit_gpus_per_node"], 2)
-        self.assertEqual(cfg["ourFit"]["fit_device"], "cuda")
+        # defaults applied for omitted keys
+        self.assertEqual(cfg["ourFit"]["fit_jobs_per_node"], 2)
+        self.assertEqual(cfg["ourFit"]["fit_cores_per_job"], 1)
+        self.assertEqual(cfg["Main"]["device"], "cuda")
         # space-separated -> list
         self.assertEqual(cfg["FitSNAP"]["chem_elem"], ["H", "Be", "W"])
 

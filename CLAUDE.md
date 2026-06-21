@@ -38,6 +38,27 @@ This pipelining is essential for GPU utilization: without it, GPUs sit idle wait
 
 **Never replace this with sequential phases** (e.g., "Phase 1: entropy, Phase 2: labeling, ...") — that destroys the overlap and wastes resources.
 
+### CRITICAL: never make futures setup data-dependent (keep it dynamic)
+
+All futures are submitted UPFRONT (before the polling `while` loop) so tasks start the instant their
+dependencies resolve. **Do NOT compute anything at setup time that requires a future's RESULT** —
+e.g., do not size a labeling task's resources from the structure's atom count, because that forces
+the setup code to block on the entropy future before it can submit the labeling future, serializing
+the whole submission and gutting the dynamic overlap (the package's main selling point). Per-task
+resources must be UNIFORM and config-driven (static), never data-dependent. The same rule killed an
+earlier "allocate VASP cores per structure size" idea — it's not allowed.
+
+### Scale/throughput regime (optimize for this, not per-structure latency)
+
+PotMill runs at SCALE: ~100k+ structures across as many nodes as available (100+), and the goal is to
+collect AS MUCH labeled DATA as possible within a wall-clock budget (e.g., 24 h) at high CPU/GPU
+utilization. Optimize for **total throughput (structures/node-hour) and utilization, NOT per-structure
+latency.** Labeling is embarrassingly parallel, so prefer MANY SMALL jobs over FEW LARGE parallel jobs:
+parallel speedup is ≤ linear, so the most throughput-efficient layout is the FEWEST cores per job that
+still fits (down to 1-core serial VASP — zero MPI/KPAR overhead), running as many concurrent jobs as
+**memory (capacity + bandwidth)** allows. Per-job MPI/KPAR parallelism only helps latency, which we
+don't care about here. Tune the uniform `<stage>_cores_per_job` to the memory-bound throughput peak.
+
 ## Package structure
 
 ```
@@ -115,12 +136,13 @@ The pipeline is configured via a `config.ini` in the working directory, parsed b
 `potmill.config.ConfigManager`. "Our" sections have documented defaults in
 `ConfigManager.DEFAULTS` and warn on unknown keys; passthrough sections forward kwargs verbatim
 to external calculators. Key sections:
-- `[Main]`: pipeline stage toggles (`entropy`/`labeling`/`featurize`/`fit`/`pareto`/`pops`), `nconfigurations`, `batch_size`
+- `[Main]`: pipeline stage toggles (`entropy`/`labeling`/`featurize`/`fit`/`pareto`/`pops`), `nconfigurations`, `batch_size`, and `device` = `cuda` | `cpu` (drives labeling + fitting placement)
 - `[FitSNAP]`: MLIP type (ACE/SNAP), element specification, FitSNAP.in filename
-- `[ourStructureGen]`: structure generation method and parameters (defaults resolved in `structuregen`)
-- `[ourLabeling]`: `calculator` = `FAIRChemCalculator` | `Vasp` | `LAMMPS`, plus `label_batch_size`
-- `[ourFeaturization]`: `featurize_workers_per_node`, `ncores_per_featurization`
-- `[ourFit]`: `fit_gpus_per_node`, `fit_device`, `fit_method`, `n_fold`, `fit_engine`, `ncores_per_fit`
+- `[ourStructureGen]`: structure generation method and parameters (defaults resolved in `structuregen`), plus `entropy_jobs_per_node`, `entropy_cores_per_job`
+- `[ourLabeling]`: `calculator` = `FAIRChemCalculator` | `Vasp` | `LAMMPS`, plus `label_batch_size`, `labeling_jobs_per_node`, `labeling_cores_per_job`
+- `[ourFeaturization]`: `featurize_jobs_per_node`, `featurize_cores_per_job`
+- `[ourFit]`: `fit_jobs_per_node`, `fit_cores_per_job`, `fit_method`, `n_fold`, `fit_engine`
+- Per-stage layout is uniform: each stage has `<stage>_jobs_per_node` concurrent jobs of `<stage>_cores_per_job` cores. In `cuda` mode each labeling/fit job takes one GPU; in `cpu` mode each takes its cores and `worker_layout` checks the per-node sum leaves cores free for the dynamic executor.
 - `[ourHyperparameters]`: the swept grid (`min/max_rcut`, `num_rcut`, `min/max_nmax`, `min/max_lmax`, `min/max_twojmax`, `middle_eweight`, `num_eweights`)
 - `[FAIRChemCalculator]`, `[Vasp]`, `[LAMMPS]`: passthrough kwargs for the chosen labeling backend
 

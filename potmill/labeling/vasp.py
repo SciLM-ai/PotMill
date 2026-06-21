@@ -1,6 +1,9 @@
-"""VASP labeling backend. All calculator keywords come from the [Vasp] config section and are
-forwarded verbatim to ase.calculators.vasp.Vasp; anything omitted uses ASE's own defaults. The
-special keys ``pp_path`` and ``command`` set VASP_PP_PATH / the run command via environment."""
+"""VASP labeling backend. Single-point DFT defaults (from vasp-ase-sp.py) are applied to every
+configuration and any [Vasp] config key overrides them, so the user can tune any setting from
+config.ini while the defaults work for any element. Per-atom initial MAGMOMs (also from
+vasp-ase-sp.py; unknown elements -> 1.0) are set on the structure unless ispin=1. The special
+keys ``pp_path`` and ``command`` set VASP_PP_PATH / the run command via environment; ``setups``
+is parsed from a string into ASE's setups dict (config.ini cannot carry a dict)."""
 
 import glob
 import os
@@ -14,6 +17,64 @@ from ase.calculators.vasp import Vasp
 from ase.io import read, write
 
 from potmill.bfile import b_rows, write_b
+
+# Exact single-point DFT settings from vasp-ase-sp.py; each is overridable via a [Vasp] key.
+_VASP_DEFAULTS = {
+    "xc": "pbe",
+    "encut": 500,
+    "ismear": 0,
+    "sigma": 0.1,
+    "lwave": False,
+    "pp": "pbe",
+    "lcharg": False,
+    "prec": "Accurate",
+    "nelm": 200,
+    "ediff": 1e-6,
+    "kspacing": 0.125,
+    "lorbit": 11,
+}
+
+# Element initial magnetic moments (pymatgen convention) from vasp-ase-sp.py; unknown -> 'default'.
+# Setting these makes ASE write MAGMOM + ISPIN=2 generically for any element.
+_MAGMOM = {
+    "default": 1.0,
+    "Co": 2.0,
+    "Cr": 2.0,
+    "Fe": 2.5,
+    "Mn": 5.0,
+    "Ni": 1.5,
+    "Ce": 5.0,
+    "Eu": 10.0,
+    "Pr": 3.58,
+    "Nd": 3.62,
+    "Pm": 2.68,
+    "Sm": 0.85,
+    "Gd": 7.94,
+    "Tb": 9.72,
+    "Dy": 10.65,
+    "Ho": 10.6,
+    "Er": 9.58,
+    "Tm": 7.56,
+    "Yb": 4.54,
+}
+
+
+def parse_setups(value):
+    """Turn the [Vasp] ``setups`` value into ASE's setups dict. Tokens without ':' set the base PAW
+    set; ``El:label`` tokens set a per-element override -- e.g. 'recommended W:_sv' ->
+    {'base': 'recommended', 'W': '_sv'}. interpret_string hands us a str (one token) or a list."""
+    if isinstance(value, dict):
+        return value
+    tokens = value if isinstance(value, list) else str(value).split()
+    setups = {}
+    for raw in tokens:
+        tok = str(raw)
+        if ":" in tok:
+            el, label = tok.split(":", 1)
+            setups[el] = label
+        else:
+            setups["base"] = tok
+    return setups
 
 
 def make_init_vasp(config):
@@ -29,14 +90,19 @@ def make_init_vasp(config):
 def vasp(start_path, input_file, job_id, dirpath, vasp_kwargs):
     os.makedirs(dirpath, exist_ok=True)
     os.chdir(dirpath)
-    kwargs = dict(vasp_kwargs)
+    kwargs = {**_VASP_DEFAULTS, **vasp_kwargs}  # user [Vasp] keys override the defaults
     pp_path = kwargs.pop("pp_path", None)
     command = kwargs.pop("command", None)
+    # interpret_string splits a spaced value (e.g. "flux run -n 24 ... vasp") into a token list;
+    # rejoin it into the single shell command string ASE expects.
+    if isinstance(command, list):
+        command = " ".join(str(x) for x in command)
     if pp_path:
         os.environ["VASP_PP_PATH"] = pp_path
     if command:
         os.environ["VASP_COMMAND"] = command
         os.environ["ASE_VASP_COMMAND"] = command
+    kwargs["setups"] = parse_setups(kwargs.get("setups", "recommended"))
 
     atoms = (
         input_file
@@ -44,6 +110,12 @@ def vasp(start_path, input_file, job_id, dirpath, vasp_kwargs):
         else read(start_path + input_file, index=0, format="vasp")
     )
     atoms.pbc = True
+    # Per-atom initial magnetic moments (any element; default 1.0) -> ASE writes MAGMOM + ISPIN=2,
+    # reproducing vasp-ase-sp.py. Skipped when the user forces a non-spin run via [Vasp] ispin = 1.
+    if int(kwargs.get("ispin", 2)) != 1:
+        atoms.set_initial_magnetic_moments(
+            [_MAGMOM.get(s, _MAGMOM["default"]) for s in atoms.get_chemical_symbols()]
+        )
     print("RUN DIRECTORY: ", os.getcwd(), " INPUT FILE: ", input_file, flush=True)
 
     rows = None
