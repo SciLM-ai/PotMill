@@ -115,6 +115,38 @@ class ResourceMonitor:
                 traceback.print_exc()
             self._stop_event.wait(self.interval)
 
+    # ---- sampling helper ----
+
+    def _capped_run(self, cmd, timeout):
+        """Return cmd's stdout (or None on failure/timeout/nonzero) WITHOUT ever blocking the caller
+        longer than ~timeout, even if the subprocess hangs in an uninterruptible flux/network wait
+        (subprocess's own timeout cannot kill a D-state child -- that is what stalled the monitor for
+        up to 10 min at a time, leaving multi-minute row gaps that read as drops to 0). The call runs
+        in a throwaway daemon thread; a hung call is abandoned (it self-reaps when the syscall finally
+        returns) so the monitor loop keeps writing rows on schedule -- a stalled sample becomes a
+        single empty cell, not a row gap. Matters more at scale (flux exec -r all over more nodes).
+        """
+        box = {}
+
+        def _work():
+            try:
+                p = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                    start_new_session=True,
+                )
+                box["out"] = p.stdout if p.returncode == 0 else None
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                box["out"] = None
+
+        t = threading.Thread(target=_work, daemon=True)
+        t.start()
+        t.join(timeout + 5)
+        return box.get("out")
+
     # ---- GPU collection (nvidia-smi) ----
 
     def _collect_gpu_data(self):
@@ -130,19 +162,10 @@ class ResourceMonitor:
             cmd = query_args
             timeout = 10
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        out = self._capped_run(cmd, timeout)
+        if out is None:
             return None
-        if result.returncode != 0:
-            return None
-        return self._parse_gpu_output(result.stdout)
+        return self._parse_gpu_output(out)
 
     def _parse_gpu_output(self, output):
         rows = []
@@ -197,23 +220,14 @@ class ResourceMonitor:
             cmd = ["cat", "/proc/stat"]
             timeout = 10
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            return None
-        if result.returncode != 0:
+        out = self._capped_run(cmd, timeout)
+        if out is None:
             return None
 
         sib = self._phys_map()  # logical cpu index -> physical core id (this node's topology)
         phys_active = {}  # (rank, physical core) -> summed active jiffy delta over its SMT siblings
         phys_total = {}  # (rank, physical core) -> per-thread total jiffy delta (~wall*HZ)
-        for raw_line in result.stdout.splitlines():
+        for raw_line in out.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
