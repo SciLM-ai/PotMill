@@ -109,10 +109,13 @@ def main():
     )
 
     # ---- Panel 1: GPU Utilization ----
+    # Drop missing samples (a flux-exec timeout under load leaves an empty cell) so the trace
+    # connects across the gap instead of plunging to 0, which would misread as a real drop.
     ax_gpu = axes[0]
     gpu_util = pd.to_numeric(df["mean_gpu_util_pct"], errors="coerce")
-    ax_gpu.fill_between(t, 0, gpu_util, alpha=0.25, color="#0072B2")
-    ax_gpu.plot(t, gpu_util, color="#0072B2", linewidth=0.8)
+    gpu_m = gpu_util.notna()
+    ax_gpu.fill_between(t[gpu_m], 0, gpu_util[gpu_m], alpha=0.25, color="#0072B2")
+    ax_gpu.plot(t[gpu_m], gpu_util[gpu_m], color="#0072B2", linewidth=0.8)
     ax_gpu.set_ylabel("GPU Util. (%)", fontsize=10)
     ax_gpu.set_ylim(0, 105)
     ax_gpu.yaxis.set_major_locator(MultipleLocator(25))
@@ -122,8 +125,9 @@ def main():
     # ---- Panel 2: CPU Utilization ----
     ax_cpu = axes[1]
     cpu_util = pd.to_numeric(df["mean_cpu_util_pct"], errors="coerce")
-    ax_cpu.fill_between(t, 0, cpu_util, alpha=0.25, color="#D55E00")
-    ax_cpu.plot(t, cpu_util, color="#D55E00", linewidth=0.8)
+    cpu_m = cpu_util.notna()  # see Panel 1: connect across missing samples, don't plunge to 0
+    ax_cpu.fill_between(t[cpu_m], 0, cpu_util[cpu_m], alpha=0.25, color="#D55E00")
+    ax_cpu.plot(t[cpu_m], cpu_util[cpu_m], color="#D55E00", linewidth=0.8)
     ax_cpu.set_ylabel("CPU Util. (physical, %)", fontsize=10)
     ax_cpu.set_ylim(0, 105)
     ax_cpu.yaxis.set_major_locator(MultipleLocator(25))
