@@ -147,11 +147,18 @@ def main():
             "num_nodes": 1,
         }
     else:  # cpu
-        # VASP labeling worker is a lightweight Python process (1 core); the [Vasp] `command`
-        # launches VASP with `flux run -n <labeling_cores_per_job> -o cpu-affinity=per-task ...`,
-        # which grabs that many cores from the flux instance and schedules the concurrent VASP
-        # jobs on disjoint cores (verified by the probe). So we do NOT reserve label cores here.
-        labeling_resource_dict = {"cores": 1, "gpus_per_core": 0, "num_nodes": 1}
+        # VASP labeling worker is a NESTED flux instance (flux_executor_nesting below) owning
+        # labeling_cores_per_job cores; the [Vasp] `command` runs `flux run -n <labeling_cores_per_job>
+        # vasp` INSIDE it, so the VASP ranks land on the worker's own cores -- flux's PMI is the one
+        # the Cray binary accepts -- with the broker overlapping, i.e. no separate orchestrator core
+        # (benchmarked +47% throughput at 4 ranks/job vs 12, since fewer ranks pack more concurrent
+        # jobs and the wasted core is gone).
+        labeling_resource_dict = {
+            "cores": 1,
+            "threads_per_core": res.label_cores_per_job,
+            "gpus_per_core": 0,
+            "num_nodes": 1,
+        }
         # Fitting is in-process torch on CPU: 1 core with fit_cores_per_job threads.
         fitting_resource_dict = {
             "cores": 1,
@@ -186,6 +193,10 @@ def main():
                 max_workers=res.n_label_workers,
                 flux_executor=flux_executor,
                 block_allocation=True,
+                # cpu: each worker is a nested flux instance so the [Vasp] `flux run -n N vasp`
+                # launches in the worker's own cores (no orchestrator core). cuda labeling (UMA)
+                # runs in-process on its GPU and needs no nesting.
+                flux_executor_nesting=(device == "cpu"),
                 init_function=labeling.init_function,
                 restart_limit=3,
                 resource_dict=labeling_resource_dict,
@@ -550,17 +561,28 @@ def main():
                                     print(
                                         "LABELING EXECUTOR SHUT DOWN - resources freed", flush=True
                                     )
-                                    # Take over the just-freed labeling resources (GPUs in cuda mode,
-                                    # cores in cpu mode) for fitting via dynamic max_workers on the
-                                    # block-allocated executor. Roughly halves the fit tail. Safe on
-                                    # cpu because fit_cores_per_job <= labeling_cores_per_job, so the
-                                    # added fit workers fit inside the cores labeling just released.
+                                    # Take over the just-freed labeling resources for fitting via
+                                    # dynamic max_workers on the block-allocated executor (mops up the
+                                    # fit tail). Reclaim by RESOURCE, not worker count: add as many fit
+                                    # workers as fit in what labeling freed, floored PER NODE, so no
+                                    # node oversubscribes and DYNAMIC_RESERVE_CORES stay free for
+                                    # combine_b/cost/pareto. cuda: a labeling worker frees 1 GPU and a
+                                    # fit worker takes 1 GPU -> n_label (unchanged). cpu: cores differ
+                                    # (e.g. label 4, fit 5), so divide freed cores by fit cores.
                                     if fit_mode:
-                                        fitting_exe.max_workers = (
-                                            res.n_fit_workers + res.n_label_workers
-                                        )
+                                        if device == "cuda":
+                                            added_fit_workers = res.n_label_workers
+                                        else:
+                                            freed_cores_per_node = (
+                                                res.n_label_workers // nnodes
+                                            ) * res.label_cores_per_job
+                                            added_fit_workers = (
+                                                freed_cores_per_node // res.fit_cores_per_job
+                                            ) * nnodes
+                                        new_max_fit = res.n_fit_workers + added_fit_workers
+                                        fitting_exe.max_workers = new_max_fit
                                         print(
-                                            f"FITTING expanded to {res.n_fit_workers + res.n_label_workers} workers "
+                                            f"FITTING expanded to {new_max_fit} workers "
                                             f"(claimed freed labeling resources)",
                                             flush=True,
                                         )

@@ -12,10 +12,10 @@
 #SBATCH -J potmill_WBe_cpu
 #SBATCH -A m4884
 #SBATCH -C cpu
-#SBATCH -N 4
+#SBATCH -N 16
 #SBATCH --ntasks-per-node=1
 #SBATCH -q regular
-#SBATCH -t 10:00:00
+#SBATCH -t 12:00:00
 #SBATCH -o run.%j.log
 
 set -uo pipefail

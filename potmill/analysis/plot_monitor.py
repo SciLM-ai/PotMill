@@ -3,7 +3,7 @@
 
 Generates a 3-panel figure with shared x-axis (elapsed time):
   Panel 1: Mean GPU utilization (%)
-  Panel 2: Mean CPU utilization (%)
+  Panel 2: Mean CPU utilization (per-physical-core, %; SMT siblings summed)
   Panel 3: Gantt chart of pipeline stage activity
 
 Usage:
@@ -124,7 +124,7 @@ def main():
     cpu_util = pd.to_numeric(df["mean_cpu_util_pct"], errors="coerce")
     ax_cpu.fill_between(t, 0, cpu_util, alpha=0.25, color="#D55E00")
     ax_cpu.plot(t, cpu_util, color="#D55E00", linewidth=0.8)
-    ax_cpu.set_ylabel("CPU Util. (%)", fontsize=10)
+    ax_cpu.set_ylabel("CPU Util. (physical, %)", fontsize=10)
     ax_cpu.set_ylim(0, 105)
     ax_cpu.yaxis.set_major_locator(MultipleLocator(25))
     ax_cpu.grid(True, alpha=0.25, linewidth=0.5)

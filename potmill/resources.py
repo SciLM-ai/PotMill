@@ -34,9 +34,11 @@ def query_flux():
 
 
 # core(s)/node kept free for the dynamic `exe` (combine_b is on the critical path
-# labeling->combine_b->featurize/fit; cost/pareto run there too). combine_b is chained (one at a
-# time) so a single free core keeps it moving; freed VASP cores give cost/pareto transient room.
-DYNAMIC_RESERVE_CORES = 1
+# labeling->combine_b->featurize/fit; cost/pareto run there too). 2 cores: one keeps combine_b
+# moving while the other lets cost/pareto run concurrently instead of contending for a single core.
+# These cores are simply never allocated to a block worker -- the budget assertion below guarantees
+# Sum(stage cores/node) <= cores_per_node - RESERVE, so they always stay free for `exe` to grab.
+DYNAMIC_RESERVE_CORES = 2
 
 
 def worker_layout(config, nnodes, ncores, ngpus):
@@ -73,25 +75,27 @@ def worker_layout(config, nnodes, ncores, ngpus):
             f">0 and fit in gpus_per_node ({gpus_per_node})"
         )
     elif device == "cpu":
-        # Each VASP labeling job is a 1-core Python worker plus label_cpj cores grabbed from the
-        # flux instance by `flux run -n label_cpj` (the [Vasp] command). entropy/fit reserve their
-        # cores as threads_per_core; featurize as an MPI job of feat_cpj cores.
+        # Each VASP labeling job is a NESTED flux instance owning label_cpj cores; the [Vasp]
+        # `command` runs `flux run -n label_cpj vasp` INSIDE that nested instance (flux's PMI, which
+        # the Cray binary accepts), so the ranks land on the worker's own cores with the broker
+        # overlapping -- no separate orchestrator core. entropy/fit reserve their cores as
+        # threads_per_core; featurize as an MPI job of feat_cpj cores.
         used = (
             entropy_jpn * entropy_cpj
-            + label_jpn * (1 + label_cpj)
+            + label_jpn * label_cpj
             + feat_jpn * feat_cpj
             + fit_jpn * fit_cpj
         )
         free = cores_per_node - used
         assert used <= cores_per_node - DYNAMIC_RESERVE_CORES, (
             f"cpu core budget/node exceeded: entropy {entropy_jpn}x{entropy_cpj} + labeling "
-            f"{label_jpn}x(1+{label_cpj}) + featurize {feat_jpn}x{feat_cpj} + fit "
+            f"{label_jpn}x{label_cpj} + featurize {feat_jpn}x{feat_cpj} + fit "
             f"{fit_jpn}x{fit_cpj} = {used} cores, but only {cores_per_node}/node available and >= "
             f"{DYNAMIC_RESERVE_CORES} must stay free for combine_b/cost/pareto"
         )
         print(
             f"CPU core budget/node: entropy {entropy_jpn}x{entropy_cpj} + labeling "
-            f"{label_jpn}x(1+{label_cpj}) + featurize {feat_jpn}x{feat_cpj} + fit "
+            f"{label_jpn}x{label_cpj} + featurize {feat_jpn}x{feat_cpj} + fit "
             f"{fit_jpn}x{fit_cpj} = {used}/{cores_per_node} cores, {free} free for the dynamic exe",
             flush=True,
         )

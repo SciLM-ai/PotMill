@@ -182,12 +182,19 @@ class ResourceMonitor:
     # ---- CPU collection (/proc/stat) ----
 
     def _collect_cpu_data(self):
-        """Read /proc/stat and compute CPU utilization via delta."""
+        """Per-PHYSICAL-core CPU utilization (delta), averaged over the allocation.
+
+        Reads the PER-CPU lines of /proc/stat (logical/SMT threads) and aggregates each physical
+        core's SMT siblings (summed active time, capped at 100%). PotMill binds 1 rank per physical
+        core, so a plain logical average would read ~half (the idle SMT siblings drag it down --
+        Perlmutter is SMT-2). Per-physical gives true core occupancy and stays correct for the
+        multithreaded GPU/UMA stages too (which DO use both siblings).
+        """
         if self.n_nodes > 1:
-            cmd = ["flux", "exec", "-r", "all", "-l", "head", "-1", "/proc/stat"]
+            cmd = ["flux", "exec", "-r", "all", "-l", "cat", "/proc/stat"]
             timeout = 30
         else:
-            cmd = ["head", "-1", "/proc/stat"]
+            cmd = ["cat", "/proc/stat"]
             timeout = 10
 
         try:
@@ -203,8 +210,10 @@ class ResourceMonitor:
         if result.returncode != 0:
             return None
 
-        utils = []
-        for raw_line in result.stdout.strip().splitlines():
+        sib = self._phys_map()  # logical cpu index -> physical core id (this node's topology)
+        phys_active = {}  # (rank, physical core) -> summed active jiffy delta over its SMT siblings
+        phys_total = {}  # (rank, physical core) -> per-thread total jiffy delta (~wall*HZ)
+        for raw_line in result.stdout.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
@@ -219,25 +228,63 @@ class ResourceMonitor:
                 rest = line
 
             parts = rest.split()
-            if len(parts) < 5 or parts[0] != "cpu":
-                continue
+            label = parts[0] if parts else ""
+            if (
+                len(parts) < 6
+                or len(label) <= 3
+                or not label.startswith("cpu")
+                or not label[3:].isdigit()
+            ):
+                continue  # skip the "cpu" aggregate and non-cpu lines (intr/ctxt/...)
+            idx = int(label[3:])
             values = [int(x) for x in parts[1:]]
-            idle = values[3]
-            iowait = values[4] if len(values) > 4 else 0
+            idle = values[3] + (values[4] if len(values) > 4 else 0)
             total = sum(values)
-            active = total - idle - iowait
+            active = total - idle
 
-            prev = self._prev_cpu_stats.get(rank)
-            if prev is not None:
-                d_total = total - prev[0]
-                d_active = active - prev[1]
-                if d_total > 0:
-                    utils.append(d_active / d_total * 100.0)
-            self._prev_cpu_stats[rank] = (total, active)
+            key = (rank, idx)
+            prev = self._prev_cpu_stats.get(key)
+            self._prev_cpu_stats[key] = (total, active)
+            if prev is None:
+                continue
+            d_total = total - prev[0]
+            d_active = active - prev[1]
+            if d_total <= 0:
+                continue
+            pkey = (rank, sib.get(idx, idx))
+            phys_active[pkey] = phys_active.get(pkey, 0) + d_active
+            phys_total[pkey] = max(phys_total.get(pkey, 0), d_total)
 
+        utils = [
+            min(100.0, phys_active[k] / phys_total[k] * 100.0)
+            for k in phys_active
+            if phys_total.get(k, 0) > 0
+        ]
         if utils:
             return sum(utils) / len(utils)
         return None
+
+    def _phys_map(self):
+        """logical-cpu-index -> physical-core-id from this node's topology (cached; nodes uniform)."""
+        m = getattr(self, "_physmap", None)
+        if m is not None:
+            return m
+        m = {}
+        try:
+            import glob
+
+            for d in glob.glob("/sys/devices/system/cpu/cpu[0-9]*"):
+                try:
+                    idx = int(d.rsplit("cpu", 1)[-1])
+                    with open(d + "/topology/thread_siblings_list") as fh:
+                        sibs = fh.read().strip()
+                    m[idx] = int(sibs.replace("-", ",").split(",")[0])
+                except (OSError, ValueError):
+                    pass
+        except OSError:
+            pass
+        self._physmap = m
+        return m
 
     # ---- CSV output ----
 
@@ -324,7 +371,7 @@ class ResourceMonitor:
 
         # CPU summary
         if cpu_util is not None:
-            lines.append(f"[Monitor] CPU Util: avg={cpu_util:.0f}%")
+            lines.append(f"[Monitor] CPU Util (physical): avg={cpu_util:.0f}%")
 
         # Active stages
         active = [f"{s}({c})" for s, c in task_counts.items() if c and c > 0]
