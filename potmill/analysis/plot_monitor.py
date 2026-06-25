@@ -13,6 +13,7 @@ Usage:
 import argparse
 
 import matplotlib
+import numpy as np
 import pandas as pd
 
 matplotlib.use("Agg")
@@ -44,8 +45,21 @@ STAGE_LABELS = {
 STAGE_ORDER = list(STAGE_LABELS.keys())
 
 
-def _find_active_spans(t, active, gap_tolerance_min=0.5):
-    """Find contiguous spans where active is True, merging gaps smaller than tolerance."""
+def _find_active_spans(t, active, gap_tolerance_min=None):
+    """Find contiguous spans where active is True, bridging only short sampling
+    gaps (a few dropped/blank samples), NOT the genuine idle time between bursts.
+
+    The merge tolerance is derived from the sampling cadence when not given. The
+    monitor now samples every ~1-2 s, so a fixed 30 s tolerance fused a bursty
+    stage's many short bursts (e.g. b_collecting, which grabs a core briefly per
+    combine_b and releases it) into one misleading continuous bar. Bridging only
+    ~4 samples keeps real bursts separate while still closing the one-row holes
+    left by an occasional flux-exec sampling gap. Capped at the old 30 s so slow
+    sampling keeps its previous behaviour."""
+    if gap_tolerance_min is None:
+        dt = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+        gap_tolerance_min = min(0.5, 4.0 * dt)
+
     raw_spans = []
     in_span = False
     start = None
@@ -137,6 +151,10 @@ def main():
     # ---- Panel 3: Gantt Chart ----
     ax_gantt = axes[2]
 
+    # Floor width so a single-sample (sub-cadence) burst still renders as a
+    # visible tick rather than a zero-width (invisible) bar.
+    min_bar_w = 1.5 * float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+
     for i, stage in enumerate(active_stages):
         running_col = f"n_{stage}_running"
         remaining_col = f"n_{stage}"
@@ -154,7 +172,7 @@ def main():
         for start, end in spans:
             ax_gantt.barh(
                 i,
-                end - start,
+                max(end - start, min_bar_w),
                 left=start,
                 height=0.65,
                 color=STAGE_COLORS[stage],
