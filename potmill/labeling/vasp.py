@@ -124,7 +124,9 @@ def vasp(start_path, input_file, job_id, dirpath, vasp_kwargs):
         energy, forces = atoms.get_potential_energy(), atoms.get_forces()
         rows = b_rows(job_id, energy, len(atoms), forces)
         write_b("b", job_id, energy, len(atoms), forces)
-        atoms.info["job_id"] = int(job_id)  # self-describing labeled traj (downstream keys composition on this)
+        atoms.info["job_id"] = int(
+            job_id
+        )  # self-describing labeled traj (downstream keys composition on this)
         write(f"atoms_{job_id}.traj", images=atoms, format="traj")
         convert_xml_to_jason("vasprun.xml", "atoms_%i_" % job_id)
         _cleanup_vasp_files(job_id)

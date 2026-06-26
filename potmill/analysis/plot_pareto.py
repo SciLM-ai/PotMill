@@ -41,11 +41,30 @@ def pareto_mask(E, F, C):
 
 
 def _panel3d(ax, E, F, C, front, knee_idx, title, labels, elev, azim):
-    ax.scatter(E[~front], F[~front], C[~front], s=8, c="0.7", alpha=0.5,
-               depthshade=False, label="dominated")
+    ax.scatter(
+        E[~front],
+        F[~front],
+        C[~front],
+        s=8,
+        c="0.7",
+        alpha=0.5,
+        depthshade=False,
+        label="dominated",
+    )
     ax.scatter(E[front], F[front], C[front], s=34, c="k", depthshade=False, label="Pareto front")
-    ax.scatter([E.iloc[knee_idx]], [F.iloc[knee_idx]], [C.iloc[knee_idx]], s=180, marker="*",
-               c="red", edgecolor="k", linewidth=0.5, depthshade=False, zorder=10, label="chosen knee")
+    ax.scatter(
+        [E.iloc[knee_idx]],
+        [F.iloc[knee_idx]],
+        [C.iloc[knee_idx]],
+        s=180,
+        marker="*",
+        c="red",
+        edgecolor="k",
+        linewidth=0.5,
+        depthshade=False,
+        zorder=10,
+        label="chosen knee",
+    )
     ax.set_xlabel("\n" + labels[0], fontsize=9)
     ax.set_ylabel("\n" + labels[1], fontsize=9)
     ax.set_zlabel("\n" + labels[2], fontsize=9)
@@ -58,14 +77,34 @@ def _panel3d(ax, E, F, C, front, knee_idx, title, labels, elev, azim):
 def fig_3d(df, wfront, ufront, knee_idx, hp, out, elev, azim):
     fig = plt.figure(figsize=(13, 6))
     axw = fig.add_subplot(1, 2, 1, projection="3d")
-    _panel3d(axw, df["test_e_rmse_weighted"], df["test_f_rmse_weighted"], df["cost"], wfront,
-             knee_idx, "Weighted (pipeline metric)",
-             ["E-RMSE (weighted)", "F-RMSE (weighted)", "cost (s)"], elev, azim)
+    _panel3d(
+        axw,
+        df["test_e_rmse_weighted"],
+        df["test_f_rmse_weighted"],
+        df["cost"],
+        wfront,
+        knee_idx,
+        "Weighted (pipeline metric)",
+        ["E-RMSE (weighted)", "F-RMSE (weighted)", "cost (s)"],
+        elev,
+        azim,
+    )
     axu = fig.add_subplot(1, 2, 2, projection="3d")
-    _panel3d(axu, df["test_e_rmse"], df["test_f_rmse"], df["cost"], ufront,
-             knee_idx, "Unweighted physical",
-             ["E-RMSE (eV/atom)", "F-RMSE (eV/Å)", "cost (s)"], elev, azim)
-    fig.suptitle(f"PotMill Pareto front — {len(df)} models  |  knee: {hp}", fontsize=11, fontweight="bold")
+    _panel3d(
+        axu,
+        df["test_e_rmse"],
+        df["test_f_rmse"],
+        df["cost"],
+        ufront,
+        knee_idx,
+        "Unweighted physical",
+        ["E-RMSE (eV/atom)", "F-RMSE (eV/Å)", "cost (s)"],
+        elev,
+        azim,
+    )
+    fig.suptitle(
+        f"PotMill Pareto front — {len(df)} models  |  knee: {hp}", fontsize=11, fontweight="bold"
+    )
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(out, dpi=200, bbox_inches="tight")
     print(f"Saved: {out}")
@@ -73,26 +112,50 @@ def fig_3d(df, wfront, ufront, knee_idx, hp, out, elev, azim):
 
 def fig_2d(df, front, knee_idx, hp, out):
     """2D projections of the UNWEIGHTED physical front; each panel colours by the 3rd axis."""
-    panels = [("test_e_rmse", "test_f_rmse", "cost", "E-RMSE (eV/atom)", "F-RMSE (eV/Å)", "cost (s)"),
-              ("test_e_rmse", "cost", "test_f_rmse", "E-RMSE (eV/atom)", "cost (s)", "F-RMSE (eV/Å)"),
-              ("test_f_rmse", "cost", "test_e_rmse", "F-RMSE (eV/Å)", "cost (s)", "E-RMSE (eV/atom)")]
+    panels = [
+        ("test_e_rmse", "test_f_rmse", "cost", "E-RMSE (eV/atom)", "F-RMSE (eV/Å)", "cost (s)"),
+        ("test_e_rmse", "cost", "test_f_rmse", "E-RMSE (eV/atom)", "cost (s)", "F-RMSE (eV/Å)"),
+        ("test_f_rmse", "cost", "test_e_rmse", "F-RMSE (eV/Å)", "cost (s)", "E-RMSE (eV/atom)"),
+    ]
     fig, ax = plt.subplots(1, 3, figsize=(16, 5))
     for k, (xc, yc, cc, xl, yl, cl) in enumerate(panels):
         sc = ax[k].scatter(df[xc], df[yc], c=df[cc], s=22, cmap="viridis", zorder=2)
         fr = front.copy()
         fr[knee_idx] = False  # don't circle the knee -- it's drawn as the star below
-        ax[k].scatter(df[xc][fr], df[yc][fr], s=70, facecolors="none", edgecolors="k",
-                      linewidths=1.3, zorder=3, label="Pareto front")
+        ax[k].scatter(
+            df[xc][fr],
+            df[yc][fr],
+            s=70,
+            facecolors="none",
+            edgecolors="k",
+            linewidths=1.3,
+            zorder=3,
+            label="Pareto front",
+        )
         kcol = sc.cmap(sc.norm(df[cc].iloc[knee_idx]))  # knee's own colorbar (3rd-axis) color
-        ax[k].scatter(df[xc].iloc[knee_idx], df[yc].iloc[knee_idx], s=340, marker="*",
-                      color=kcol, edgecolor="k", linewidth=0.9, zorder=5, label="chosen knee")
-        cb = fig.colorbar(sc, ax=ax[k]); cb.set_label(cl, fontsize=8)
-        ax[k].set_xlabel(xl); ax[k].set_ylabel(yl)
+        ax[k].scatter(
+            df[xc].iloc[knee_idx],
+            df[yc].iloc[knee_idx],
+            s=340,
+            marker="*",
+            color=kcol,
+            edgecolor="k",
+            linewidth=0.9,
+            zorder=5,
+            label="chosen knee",
+        )
+        cb = fig.colorbar(sc, ax=ax[k])
+        cb.set_label(cl, fontsize=8)
+        ax[k].set_xlabel(xl)
+        ax[k].set_ylabel(yl)
         ax[k].grid(alpha=0.25, lw=0.5)
         if k == 0:
             ax[k].legend(fontsize=8)
-    fig.suptitle(f"Pareto 2D projections (unweighted physical, {int(front.sum())} on front) — knee: {hp}",
-                 fontsize=11, fontweight="bold")
+    fig.suptitle(
+        f"Pareto 2D projections (unweighted physical, {int(front.sum())} on front) — knee: {hp}",
+        fontsize=11,
+        fontweight="bold",
+    )
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(out, dpi=200, bbox_inches="tight")
     print(f"Saved: {out}")
@@ -113,8 +176,10 @@ def main():
     df = pd.read_csv(f"{run_dir}pareto-front/results_{batch}.csv")
     knee = select_knee(df, "test_e_rmse_weighted", "test_f_rmse_weighted")
     knee_idx = int(df.index.get_loc(knee.name))
-    hp = (f"rcut={knee['rcut0']:g} nmax={int(knee['nmax1'])},{int(knee['nmax2'])} "
-          f"lmax={int(knee['lmax1'])},{int(knee['lmax2'])} eweight={knee['eweight']:g}")
+    hp = (
+        f"rcut={knee['rcut0']:g} nmax={int(knee['nmax1'])},{int(knee['nmax2'])} "
+        f"lmax={int(knee['lmax1'])},{int(knee['lmax2'])} eweight={knee['eweight']:g}"
+    )
 
     wfront = df["pareto_front"].values.astype(bool)  # weighted: the pipeline's own flag
     ufront = pareto_mask(df["test_e_rmse"], df["test_f_rmse"], df["cost"])  # unweighted, same defn
@@ -124,7 +189,9 @@ def main():
 
     fig_3d(df, wfront, ufront, knee_idx, hp, out_dir + "pareto3d.pdf", args.elev, args.azim)
     fig_2d(df, ufront, knee_idx, hp, out_dir + "pareto2d.pdf")
-    print(f"  weighted front={int(wfront.sum())} (==stored)  unweighted front={int(ufront.sum())}  knee: {hp}")
+    print(
+        f"  weighted front={int(wfront.sum())} (==stored)  unweighted front={int(ufront.sum())}  knee: {hp}"
+    )
 
 
 if __name__ == "__main__":
