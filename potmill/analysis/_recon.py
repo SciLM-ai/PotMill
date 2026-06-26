@@ -156,8 +156,9 @@ def load_beta(run, combo, batch, fold):
 
 # --------------------------------------------------------------- predictions from saved coefficients
 def reconstruct_cv(run, combo, batch, fnames, b_path=None):
-    """Cross-validated residuals for EVERY row: each config predicted by the fold
-    model that held it out (A[:, idx] @ beta_fold). Returns per-row arrays."""
+    """Cross-validated residuals for EVERY row: each config predicted by the fold model that held
+    it out (A[:, idx] @ beta_fold). Streams the design matrix batch-by-batch -- it never holds the
+    full cumulative A in memory (which is GB-to-tens at 100k scale and OOMs a login node)."""
     run_dir, n_fold, mlip = run["run_dir"], run["n_fold"], run["mlip"]
     b_path = b_path or cumulative_b_path(run_dir)
     hp_noe = (
@@ -167,26 +168,26 @@ def reconstruct_cv(run, combo, batch, fnames, b_path=None):
     )
     fidx = _feature_indices(mlip, fnames, list(hp_noe))
     rdir = rcuts_to_string([combo["rcut"]], delimiter="_")
-    A = np.concatenate(
-        [
-            np.ascontiguousarray(
-                np.load(_need(run_dir + f"features/{b}/{rdir}/a.npy"), mmap_mode="r")[:, fidx]
-            )
-            for b in range(batch + 1)
-        ]
-    )
     local_idx, job_id, b_values = read_b(b_path)
-    if A.shape[0] != len(b_values):
-        raise ValueError(f"A rows {A.shape[0]} != b rows {len(b_values)} (stop)")
     is_energy = local_idx == 0
     part = np.array([config_fold(j, n_fold) for j in job_id])
-    pred = np.empty(len(b_values))
-    for fold in range(n_fold):
-        beta = load_beta(run, combo, batch, fold)
+    betas = [load_beta(run, combo, batch, fold) for fold in range(n_fold)]
+    for beta in betas:
         if len(beta) != len(fidx):
             raise ValueError(f"beta len {len(beta)} != feature cols {len(fidx)} (stop)")
-        te = part == fold
-        pred[te] = A[te] @ beta
+    pred = np.empty(len(b_values))
+    row0 = 0
+    for b in range(batch + 1):
+        ab = np.load(_need(run_dir + f"features/{b}/{rdir}/a.npy"), mmap_mode="r")[:, fidx]
+        idx = np.arange(row0, row0 + ab.shape[0])
+        p = part[idx]
+        for fold, beta in enumerate(betas):
+            m = p == fold
+            if m.any():
+                pred[idx[m]] = np.ascontiguousarray(ab[m]) @ beta
+        row0 += ab.shape[0]
+    if row0 != len(b_values):
+        raise ValueError(f"summed A rows {row0} != b rows {len(b_values)} (stop)")
     return {"resid": pred - b_values, "ref": b_values, "is_energy": is_energy, "job_id": job_id}
 
 
