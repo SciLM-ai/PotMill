@@ -116,30 +116,69 @@ def parity(rec, dE_row, out, hp):
 
 
 # --------------------------------------------------------------- 3) error vs window
-def error_window(wm, out, hp):
+def error_window(wm, out, hp, brk=6.0):
+    """Error vs energy window on a BROKEN x-axis: the informative low-energy region (0.3 -> brk) is
+    drawn at full width, then an axis break (//), then the long high-energy tail (brk -> max) is
+    compressed into a narrow panel -- so the endpoint is still shown without a giant empty gap
+    squashing the bulk. A grey secondary axis shows the config count per window (trust where > 100)."""
     W = np.array([m["W"] for m in wm])
     ncfg = np.array([m["n_cfg"] for m in wm])
-    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
-    for k, (rk, mk, lab, unit, col) in enumerate(
-        [("E_rmse", "E_mae", "Energy", "eV/atom", EC), ("F_rmse", "F_mae", "Force", "eV/Å", FC)]
-    ):
-        ax[k].plot(W, [m[rk] for m in wm], "-o", ms=3, color=col, label="RMSE")
-        ax[k].plot(W, [m[mk] for m in wm], "--s", ms=3, color=col, alpha=0.6, label="MAE")
-        ax[k].set_xlabel("Energy window ΔE_form above min (eV/atom)")
-        ax[k].set_ylabel(f"{lab} error ({unit})")
-        ax[k].set_title(f"{lab}: error vs energy window")
-        ax[k].grid(alpha=0.25, lw=0.5)
-        a2 = ax[k].twinx()  # config count: flags the noisy small-window (low-stat) region
-        a2.plot(W, ncfg, color="0.5", lw=1, alpha=0.7)
-        a2.set_ylabel("configs in window", color="0.5", fontsize=8)
-        a2.axhline(100, color="0.7", ls="--", lw=0.7)
-        ax[k].legend(fontsize=9, loc="center right")
+    fig = plt.figure(figsize=(13, 5))
+    subfigs = fig.subfigures(1, 2, wspace=0.12)
+    specs = [("E_rmse", "E_mae", "Energy", "eV/atom", EC), ("F_rmse", "F_mae", "Force", "eV/Å", FC)]
+    for sf, (rk, mk, lab, unit, col) in zip(subfigs, specs, strict=True):
+        axm, axt = sf.subplots(
+            1, 2, sharey=True, gridspec_kw={"width_ratios": [3.0, 1.0], "wspace": 0.06}
+        )
+        rmse = np.array([m[rk] for m in wm])
+        mae = np.array([m[mk] for m in wm])
+        lo, hi = brk >= W, brk <= W  # brk is exactly a sampled window, so it joins both panels
+        for ax, msk in ((axm, lo), (axt, hi)):
+            ax.plot(W[msk], rmse[msk], "-o", ms=3, color=col, label="RMSE")
+            ax.plot(W[msk], mae[msk], "--s", ms=3, color=col, alpha=0.6, label="MAE")
+            ax.grid(alpha=0.25, lw=0.5)
+        axm.set_xlim(0.3, brk)
+        axt.set_xlim(brk, float(W.max()))
+        axt.set_xticks(np.round(np.linspace(brk, float(W.max()), 3)).astype(int))
+        # config count (grey) on a secondary y-axis spanning BOTH panels -- flags how many structures
+        # fall in each window (trust where > 100). The count ticks live on the far-right (tail) spine,
+        # since the main panel's right spine is removed for the axis break.
+        a2m, a2t = axm.twinx(), axt.twinx()
+        a2m.plot(W[lo], ncfg[lo], color="0.5", lw=1, alpha=0.7)
+        a2t.plot(W[hi], ncfg[hi], color="0.5", lw=1, alpha=0.7)
+        a2t.axhline(100, color="0.7", ls="--", lw=0.7)
+        for a2 in (a2m, a2t):
+            a2.set_ylim(0, float(ncfg.max()) * 1.05)
+        a2m.set_yticks(
+            []
+        )  # hide the count ticks at the break; show them on the far-right spine only
+        a2t.set_ylabel("configs in window", color="0.5", fontsize=8)
+        a2t.tick_params(labelsize=7, colors="0.5")
+        # hide the error + count spines at the break, then draw the diagonal break marks
+        for a in (axm, a2m):
+            a.spines["right"].set_visible(False)
+        for a in (axt, a2t):
+            a.spines["left"].set_visible(False)
+        axt.tick_params(left=False)
+        bm = {
+            "marker": [(-1, -0.5), (1, 0.5)],
+            "markersize": 8,
+            "linestyle": "none",
+            "color": "k",
+            "mec": "k",
+            "mew": 1,
+            "clip_on": False,
+        }
+        a2m.plot([1, 1], [0, 1], transform=a2m.transAxes, **bm)  # on the twins (top) so they show
+        a2t.plot([0, 0], [0, 1], transform=a2t.transAxes, **bm)
+        axm.set_ylabel(f"{lab} error ({unit})")  # y-label identifies the metric (Energy vs Force)
+        axm.legend(fontsize=8, loc="upper right")
+        sf.supxlabel("Energy window ΔE_form above min (eV/atom)", fontsize=9)
     fig.suptitle(
-        f"Error vs energy window (config count in grey; trust where >100) — knee: {hp}",
+        f"Error vs energy window  (tail beyond {brk:g} eV/atom compressed) — knee: {hp}",
         fontsize=11,
         fontweight="bold",
     )
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(out, dpi=200, bbox_inches="tight")
     print(f"Saved: {out}")
 
@@ -210,12 +249,18 @@ def main():
 
     parity(rec, dE_row, out_dir + "parity.pdf", hp)
 
-    dmax = float(np.quantile(dE_row, 0.99))
+    # Broken x-axis: sample the informative bulk densely (0.3 -> brk, ~99% of configs) and the long
+    # high-energy tail sparsely (brk -> max); error_window draws the bulk at full width and the tail
+    # compressed past an axis break, so the endpoint shows without the outlier stretching the range.
+    brk = 6.0
+    mx = float(dE_row.max())
     windows = sorted(
-        set(np.round(np.linspace(0.3, dmax, 28), 3)).union({0.5, 1.0, 2.0, dE_row.max() + 1e-6})
+        set(np.round(np.linspace(0.3, brk, 30), 3))
+        | {0.5, 1.0, 2.0}
+        | set(np.round(np.linspace(brk, mx, 8), 3))
     )
     wm = R.windowed_metrics(rec, dE_row, windows)
-    error_window(wm, out_dir + "error_window.pdf", hp)
+    error_window(wm, out_dir + "error_window.pdf", hp, brk=brk)
 
     kTs = np.logspace(np.log10(0.1), np.log10(10.0), 30)
     bm = R.boltzmann_metrics(rec, dE_row, dE_cfg, kTs)
