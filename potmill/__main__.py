@@ -525,6 +525,32 @@ def main():
                                     print(
                                         "ENTROPY EXECUTOR SHUT DOWN - resources freed", flush=True
                                     )
+                                    # Take over the just-freed entropy CPU cores for featurization,
+                                    # mirroring the labeling->fitting takeover below. Reclaim by
+                                    # RESOURCE: add as many featurize workers as fit in the cores
+                                    # entropy held, floored PER NODE, so featurize never claims more
+                                    # cores than entropy had and no node oversubscribes (the
+                                    # DYNAMIC_RESERVE_CORES stay free for combine_b/cost/pareto, as
+                                    # they already were before entropy released its cores). If
+                                    # entropy's per-node cores can't fit even one featurize worker,
+                                    # add none.
+                                    if feature_mode and not featurize_exe_shutdown:
+                                        freed_cores_per_node = (
+                                            res.n_entropy_workers // nnodes
+                                        ) * res.entropy_cores_per_job
+                                        added_feat_workers = (
+                                            freed_cores_per_node // res.featurize_cores_per_job
+                                        ) * nnodes
+                                        if added_feat_workers > 0:
+                                            new_max_feat = (
+                                                res.n_featurize_workers + added_feat_workers
+                                            )
+                                            featurize_exe.max_workers = new_max_feat
+                                            print(
+                                                f"FEATURIZE expanded to {new_max_feat} workers "
+                                                f"(claimed freed entropy cores)",
+                                                flush=True,
+                                            )
 
                             if feature_mode:
                                 featurization_futures = check_and_print_status(
