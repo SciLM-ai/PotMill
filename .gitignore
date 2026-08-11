@@ -16,3 +16,7 @@ examples/**
 !examples/HBeW/ACE/FitSNAP.in
 !examples/HBeW/ACE/run_perlmutter.sh
 !examples/HBeW/ACE/CLAUDE.md
+
+!examples/HBeW/GRACE/
+!examples/HBeW/GRACE/config.ini
+!examples/HBeW/GRACE/FitSNAP.in

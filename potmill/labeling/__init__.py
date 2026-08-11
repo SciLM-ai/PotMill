@@ -9,6 +9,7 @@ label functions share the signature ``(start_path, atoms, job_id, dirpath, <inje
 
 from collections import namedtuple
 
+from potmill.labeling.grace import grace, grace_batch, make_init_grace_calculator
 from potmill.labeling.lammps import lammps, make_init_lammps
 from potmill.labeling.uma import make_init_uma_calculator, make_init_uma_predictor, uma, uma_batch
 from potmill.labeling.vasp import make_init_vasp, vasp
@@ -24,6 +25,14 @@ def _fairchem_kwargs(config):
     return kwargs
 
 
+def _grace_kwargs(config):
+    kwargs = dict(config.get("GRACE", {}))
+    kwargs.setdefault("model", "GRACE-2L-SMAX-OMAT-large")
+    kwargs.setdefault("min_dist", 0.3)
+    kwargs["min_dist"] = float(kwargs["min_dist"])  # config.ini values arrive as strings
+    return kwargs
+
+
 def make_labeling(config):
     """Return the Labeling(init_function, per_config, batched) for the configured backend."""
     name = config.get_value("ourLabeling", "calculator", "FAIRChemCalculator")
@@ -36,6 +45,10 @@ def make_labeling(config):
         return Labeling(make_init_vasp(config), vasp, None)
     if name == "LAMMPS":
         return Labeling(make_init_lammps(config), lammps, None)
+    if name == "GRACE":
+        init = make_init_grace_calculator(_grace_kwargs(config))
+        return Labeling(init, grace, grace_batch)
     raise ValueError(
-        f"Unknown [ourLabeling] calculator '{name}' (supported: FAIRChemCalculator, Vasp, LAMMPS)"
+        f"Unknown [ourLabeling] calculator '{name}' "
+        "(supported: FAIRChemCalculator, Vasp, LAMMPS, GRACE)"
     )

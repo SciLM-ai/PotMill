@@ -18,7 +18,7 @@ import re
 
 from potmill.tools import configparse, interpret_string
 
-PASSTHROUGH_SECTIONS = ("FAIRChemCalculator", "Vasp", "LAMMPS")
+PASSTHROUGH_SECTIONS = ("FAIRChemCalculator", "Vasp", "LAMMPS", "GRACE")
 RAW_SECTIONS = ("ourStructureGen", *PASSTHROUGH_SECTIONS)
 
 
