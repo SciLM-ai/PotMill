@@ -10,7 +10,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      # Pinned so lint stays reproducible -- an unpinned ruff can add default rules on a new release
+      # and turn CI red on unchanged code. Bump this deliberately when adopting a newer ruff.
+      - run: pip install ruff==0.16.2
       - run: ruff check potmill
       - run: ruff format --check potmill
 
