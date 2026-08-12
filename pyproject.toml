@@ -71,6 +71,7 @@ ignore = [
     "SIM117",   # nested with -- the nested executor structure in __main__ is intentional
     "PLC0415",  # imports deferred inside functions (intentional for cloudpickle workers)
     "PLR0913",  # too many arguments
+    "PLR0917",  # too many positional arguments (same intent as PLR0913; multi-arg science fns are fine)
     "PLR0915",  # too many statements
     "PLR0912",  # too many branches
     "PLR2004",  # magic value comparison
