@@ -606,6 +606,7 @@ def main():
                                 cost_futures,
                                 pareto_futures,
                                 pops_futures,
+                                md_futures,
                             )
                         )
 
@@ -761,6 +762,7 @@ def main():
                                     cost_futures,
                                     pareto_futures,
                                     pops_futures,
+                                    md_futures,
                                 )
                             )
 

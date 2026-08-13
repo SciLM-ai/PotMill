@@ -58,6 +58,15 @@ For `type = H Be W` (3 elements, 9 bond types):
 
 Parameters that are per-rank (`ranks`, `lmax`, `nmax`, `lmin`, `nmaxbase`) do NOT change with element count.
 
+**`rcinner` must stay 0.** A non-zero inner cutoff makes `pair_pace` zero EVERY radial basis function
+below it (`ace_radial.cpp`: `gr.fill(0)`), while FitSNAP always writes `prehc: 0` — so there is no
+core repulsion underneath and the potential has a flat, force-free region that traps any atom pair
+that reaches it. Measured on a real exported potential: W–W energy flat at −4.53 eV with exactly zero
+force below 0.99 Å, behind a ~680 eV wall. With `rcinner = 0` the same fit learns a genuine repulsive
+wall (2234 eV at 0.80 Å) from the short contacts already in the training set, and a controlled A/B on
+identical data gives slightly BETTER errors (1.174 vs 1.366 eV/atom). 0.0 is also FitSNAP's own
+default. See the main `CLAUDE.md` for the full measurement.
+
 ## Adapting to other multi-element systems
 
 To create a new N-element example:

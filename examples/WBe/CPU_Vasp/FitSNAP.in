@@ -4,7 +4,7 @@ mumax = 2
 type = W Be
 lambda = 1.5 1.5 1.5 1.5
 rcutfac = 4.5 4.5 4.5 4.5
-rcinner = 1.0 1.0 1.0 1.0
+rcinner = 0.0 0.0 0.0 0.0   # 0 = FitSNAP's default. A non-zero inner cutoff zeroes ALL descriptors below it while prehc stays 0, leaving a force-free atom trap; see CLAUDE.md.
 drcinner = 0.01 0.01 0.01 0.01
 bzeroflag = 0
 ranks = 1 2

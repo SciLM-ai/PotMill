@@ -311,9 +311,18 @@ identical descriptor magnitudes (max |a| = 3.73e3 both ways). FitSNAP's own defa
 (An earlier note here claimed `rcinner = 0` made errors ~20x worse. That was WRONG: it compared two
 different pipeline runs with different random structures and never isolated the parameter.)
 
+**Validated at full scale.** All four example `FitSNAP.in` files now ship `rcinner = 0.0`, checked by
+a 100k-configuration GRACE run (4 nodes, 1 h 50 m): 28 Pareto potentials, 28/28 MD-stable with drift
+2.5e-9..1.9e-7 eV/atom/ps and the closest contact holding at 0.77-0.81 of its covalent bond length,
+while accuracy held (best test 0.170 eV/atom / 0.588 eV/A vs 0.165 / 0.588 for the previous
+`rcinner = 0.5/1.0` GRACE 100k run, and the front's MEDIAN energy RMSE improved 0.310 -> 0.194).
+Note those two are separate runs with different random structures, so the controlled evidence remains
+the same-data A/B above; this run establishes that nothing regresses at scale.
+
 **What `rcinner = 0` does NOT fix** is a weak fit: with 300 configurations the potential still drove
 an H-containing pair to 0.354 A. Short-range behaviour is only as good as the data, which is why
 well-trained potentials are stable either way.
+
 
 - **The test structure is the whole problem.** Every configuration the pipeline generates is entropy
   MAXIMIZED -- deliberately strange and 2-25 atoms. MD from a raw one runs away regardless of fit

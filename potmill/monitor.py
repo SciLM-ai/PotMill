@@ -15,6 +15,11 @@ TASK_STAGES = [
     "cost",
     "pareto",
     "pops",
+    # The MD screen is the only end-stage worth a row: it runs for minutes on CPU after everything
+    # else, so the Gantt shows the GPUs idle underneath it. The potential export is NOT tracked --
+    # measured at 36 s for 28 potentials across 15 subsets at production scale, it is over before a
+    # Gantt bar would be legible.
+    "md",
 ]
 
 

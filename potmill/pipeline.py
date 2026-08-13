@@ -151,7 +151,17 @@ def check_and_print_status(futures, name, total, list_of_lists=False, count_mult
     return futures
 
 
-def task_counts(entropy, labeling, b_collecting, featurization, fitting, cost, pareto, pops):
+def task_counts(
+    entropy,
+    labeling,
+    b_collecting,
+    featurization,
+    fitting,
+    cost,
+    pareto,
+    pops,
+    md=(),
+):
     """Build the {stage: count, stage_running: count} dict for ResourceMonitor.update_task_counts."""
     flat = {
         "entropy": entropy,
@@ -160,6 +170,7 @@ def task_counts(entropy, labeling, b_collecting, featurization, fitting, cost, p
         "cost": cost,
         "pareto": pareto,
         "pops": pops,
+        "md": md,
     }
     nested = {"featurization": featurization, "fitting": fitting}
     counts = {}

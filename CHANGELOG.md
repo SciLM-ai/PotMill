@@ -2,6 +2,18 @@
 
 ## Unreleased — MD stability screening
 
+- `rcinner = 0.0` in all four example `FitSNAP.in` files (HBeW/ACE, HBeW/GRACE, WRe/ACE,
+  WBe/CPU_Vasp), matching FitSNAP's own default. **Validated by a full 100k-configuration GRACE
+  pipeline run** (4 nodes, 1 h 50 m): 28 Pareto potentials exported, **28/28 stable in MD** with
+  energy drift 2.5e-9 to 1.9e-7 eV/atom/ps, final temperatures 260–324 K and the closest contact
+  holding at 0.77–0.81 of its covalent bond length. Accuracy did not regress — best test RMSE
+  0.170 eV/atom and 0.588 eV/Å versus 0.165 and 0.588 for the previous `rcinner = 0.5/1.0` GRACE
+  100k run, with the Pareto front's *median* energy RMSE improving from 0.310 to 0.194.
+- `[Main] md` appears in `pipeline_monitor.csv` and as the last row of the monitor Gantt (it runs for
+  minutes on CPU with the GPUs idle). The potential export is deliberately NOT tracked: measured at
+  36 s for 28 potentials across 15 subsets at production scale, it is over before a bar would be
+  legible.
+
 - Added the `potmill.md` stage (`[Main] md`, `[ourMD]`): every exported potential gets a short MD
   trajectory of its own, in parallel, and the outcome (`md_ok`, NVE energy drift, final temperature,
   closest approach, and the reason for any failure) lands in `potentials/md.csv` and is joined into
