@@ -10,6 +10,7 @@ from potmill.config import ConfigManager, load_fitsnap_config
 from potmill.featurization import featurize, init_featurize
 from potmill.fitting import fit, foldfit, init_fit, pops
 from potmill.labeling import make_labeling
+from potmill.md.stage import md_task, merge_md_task, prepare_structure_task
 from potmill.monitor import ResourceMonitor
 from potmill.pipeline import (
     check_and_print_status,
@@ -57,6 +58,7 @@ def main():
     pareto_mode = config["Main"]["pareto"]
     pops_mode = config["Main"]["pops"]
     potential_mode = config["Main"]["potential"]
+    md_mode = config["Main"]["md"]
     nconfigurations = config["Main"]["nconfigurations"]
     batch_size = config["Main"]["batch_size"]
     device = config["Main"]["device"]  # cuda | cpu -- drives labeling + fitting placement
@@ -130,6 +132,7 @@ def main():
     pareto_futures = []
     pops_futures = []
     potential_futures = []
+    md_futures = []
 
     featurize_cores_per_job = res.featurize_cores_per_job
     print(
@@ -533,6 +536,60 @@ def main():
                                     flush=True,
                                 )
 
+                        if md_mode and potential_futures:
+                            # MD screening of the written potentials: one structure-prep task, a
+                            # FIXED number of per-potential tasks (max_potentials -- the count cannot
+                            # depend on how many potentials the export wrote, since that is a
+                            # future's result), then one merge. Each MD task claims row i of
+                            # potentials/index.csv and returns immediately if there is no row i.
+                            print("MD jobs submission...", flush=True)
+                            md_cfg = config["ourMD"]
+                            md_resource = {
+                                "cores": int(md_cfg["md_cores_per_job"]),
+                                "gpus_per_core": 0,
+                                "num_nodes": 1,
+                                "cwd": start_path + "md",
+                                "error_log_file": "error.out",
+                                "priority": 8,
+                            }
+                            structure_future = exe.submit(
+                                prepare_structure_task,
+                                start_path,
+                                potential_futures[0],
+                                resource_dict=md_resource,
+                            )
+                            structure_future.task_ = 0
+                            md_futures.append(structure_future)
+                            md_run_futures = []
+                            for position in range(int(md_cfg["max_potentials"])):
+                                fs = exe.submit(
+                                    md_task,
+                                    start_path,
+                                    position,
+                                    structure_future,
+                                    potential_futures[0],
+                                    resource_dict=md_resource,
+                                )
+                                fs.task_ = position
+                                md_run_futures.append(fs)
+                                md_futures.append(fs)
+                            fs = exe.submit(
+                                merge_md_task,
+                                start_path,
+                                *md_run_futures,
+                                resource_dict=md_resource,
+                            )
+                            fs.task_ = 0
+                            md_futures.append(fs)
+                        elif md_mode:
+                            print(
+                                "WARNING: [Main] md = 1 but the potential export is off "
+                                "([Main] potential), so there are no potentials to MD-test; "
+                                "NO MD screening will run.",
+                                flush=True,
+                            )
+
+                        num_md_tasks = len(md_futures)  # fixed total for the progress print
                         b_futures = b_futures[1:]
                         num_b_futures = len(b_futures)
                         entropy_exe_shutdown = False
@@ -678,6 +735,9 @@ def main():
                                     potential_futures, "POTENTIAL", 1
                                 )
 
+                            if md_futures:
+                                md_futures = check_and_print_status(md_futures, "MD", num_md_tasks)
+
                             total_n_futures = (
                                 len(entropy_atoms_futures)
                                 + len(labeling_futures)
@@ -688,6 +748,7 @@ def main():
                                 + len(pareto_futures)
                                 + len(pops_futures)
                                 + len(potential_futures)
+                                + len(md_futures)
                             )
 
                             monitor.update_task_counts(

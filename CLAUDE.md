@@ -103,6 +103,10 @@ potmill/
     ace.py             # beta -> AcePot -> .yace (minimal basis; coefficients attached BY LABEL)
     mod.py             # .mod include file; [REFERENCE] zero / hybrid handling
     verify.py          # LAMMPS vs natoms*(a_E@beta) / a_F@beta cross-check + NVE MD probe
+  md/                  # MD stability screening of the exported potentials ([Main] md)
+    structure.py       # test structure: lowest formation energy per atom, replicated (or user file)
+    runner.py          # minimize + MD via LAMMPS; drift / temperature / collapse metrics
+    stage.py           # prepare -> N parallel md tasks -> merge into potentials/md.csv + index.csv
 ```
 
 Tests live in `tests/` (stdlib `unittest`); run them with `python -m unittest discover -s tests`.
@@ -161,6 +165,7 @@ to external calculators. Key sections:
 - `[ourFit]`: `fit_jobs_per_node`, `fit_cores_per_job`, `fit_method`, `n_fold`, `fit_engine`
 - Per-stage layout is uniform: each stage has `<stage>_jobs_per_node` concurrent jobs of `<stage>_cores_per_job` cores. In `cuda` mode each labeling/fit job takes one GPU; in `cpu` mode each takes its cores and `worker_layout` checks the per-node sum leaves cores free for the dynamic executor.
 - `[ourPotential]`: `which` = `none` | `knee` | `pareto` (default) | `all` (its only key -- the written `.mod` chooses its pace evaluator at runtime, see below)
+- `[ourMD]`: MD screening of the written potentials -- `structure` (`auto` | path), `min_atoms`, `minimize`, `ensemble`, `temperature`, `timestep`, `steps`, `max_potentials`, `md_cores_per_job`
 - `[ourHyperparameters]`: the swept grid (`min/max_rcut`, `num_rcut`, `min/max_nmax`, `min/max_lmax`, `min/max_twojmax`, `middle_eweight`, `num_eweights`)
 - `[FAIRChemCalculator]`, `[Vasp]`, `[LAMMPS]`: passthrough kwargs for the chosen labeling backend
 
@@ -263,10 +268,55 @@ catch per-RUN problems -- an edited grid, a FitSNAP that reordered the basis -- 
 export. Re-deriving energies through LAMMPS tests the writer and the installed FitSNAP/LAMMPS, which
 do not vary run to run, so running it every run re-proves the same fact; it lives in
 `tests/test_potential.py` (CI) and behind `--verify` for use after upgrading either package.
-`--md-steps` runs a short NVE probe (energy drift). A real MD STABILITY stage -- a different
-question entirely, a property of the fit rather than of the file -- is planned separately as
-`[Main] md` / `[ourMD]`: lowest-formation-energy structure (reuse `_recon.formation_energy`),
-replicate to a few hundred atoms, minimize, then NVT/NVE per potential as parallel tasks.
+`--md-steps` runs a short NVE probe (energy drift).
+
+## MD stability screening (`potmill/md/`, `[Main] md`)
+
+A different question from verification: not "was the file written correctly?" (a property of the
+writer, constant per install) but "is this FIT usable for dynamics?" -- a property of the training
+coverage and hyperparameters, which is why it runs per potential and belongs next to the Pareto
+table. Results land in `potentials/md.csv` (authoritative) and are joined into `index.csv`.
+
+- **The test structure is the whole problem.** Every configuration the pipeline generates is entropy
+  MAXIMIZED -- deliberately strange and 2-25 atoms. MD from a raw one runs away regardless of fit
+  quality (measured: 300 K start -> 5200 K) and says nothing. The auto path takes the run's lowest
+  FORMATION energy per atom (`_recon.formation_energy` removes composition by a per-element
+  reference fit; lowest total or per-atom energy would just pick the smallest cell or the
+  strongest-binding composition), replicates it past twice the cutoff in every direction and up to
+  `min_atoms`, and relaxes it with the potential under test. Same run, same potentials: a raw
+  entropy cell "failed" at 5700 K while the prepared structure holds 300 K with 1e-7 eV/atom/ps
+  drift. A user-supplied `structure` is used AS GIVEN (no replication) -- their cell, their question.
+- **Lowest formation energy is the SHORTLIST, not the criterion.** Two successive in-pipeline runs
+  taught this. First: all four potentials reported unstable, because the picked structure's closest
+  contact was 0.885 A -- inside ACE's inner cutoff, so `pair_pace.cpp` raised "Encountered very
+  small distance" and MD never started. Adding a hard floor (`max(rcinner) + 0.1`) fixed that, but
+  the next run picked a merely-legal candidate at 1.47 A and again failed 4/4 -- while a 2.39 A
+  candidate from the SAME run passed 4/4. The verdict was tracking the structure, not the fits. So
+  the stage now shortlists the 20 lowest formation energies, drops any that cannot be evaluated, and
+  takes the LEAST COMPRESSED survivor, ranked by `d/(r_i + r_j)` with Pyykko covalent radii (the
+  same mendeleev table `structuregen` samples) so that compositions compare fairly. Everything about
+  that choice goes to `md/structure.txt`. If nothing is evaluable the stage RAISES and asks for a
+  structure -- it never tests on a cell MD cannot start from.
+- **The collapse floor is the potential's own inner cutoff**, not a fixed number: a run "passed"
+  with its closest pair at 0.877 A and a drift 100x worse than its stable siblings, because the
+  first floor (0.5 A) was too lenient. Below `rcinner` the potential is not evaluating anything
+  meaningful, so a trajectory that gets there has collapsed however finite its energy looks.
+- **`relax_box` defaults to 0.** Relaxing the cell during minimization is more physical (entropy
+  volumes are random) but strictly harsher: an immature potential shrinks the cell until atoms fuse,
+  so the relaxation itself becomes the failure. Measured: 4/4 failed with box relaxation where 4/4
+  passed without it. It stays available for mature potentials.
+- **Drift is measured on an NVE tail, never under the thermostat.** Under `nvt` the total energy is
+  the thermostat's to change, so drift across the NVT leg measures nothing; the runner switches to
+  NVE for `steps/10` at the end and measures there.
+- **Collapse detection uses a neighbour list, not an N^2 distance matrix** (test cells can be
+  thousands of atoms), and `None` means "no pair within 3 A" -- not a NaN. An early version wrote
+  `inf * False = nan` and reported every stable potential as broken.
+- **An unstable potential is a RESULT, not an exception**: LAMMPS aborts ("Lost atoms") are caught
+  and returned as `md_ok = 0` with the reason, since finding those is the point of the stage.
+- **Task count is fixed at setup** (`max_potentials`), because how many potentials the export wrote
+  is a future's result and must not size the submission; task `i` claims row `i` of `index.csv` and
+  returns immediately if there is no row `i`. The merge task WARNS when more potentials were
+  exported than tested, so a truncated screen cannot look complete.
 
 ## Dependencies
 

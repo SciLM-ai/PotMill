@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — MD stability screening
+
+- Added the `potmill.md` stage (`[Main] md`, `[ourMD]`): every exported potential gets a short MD
+  trajectory of its own, in parallel, and the outcome (`md_ok`, NVE energy drift, final temperature,
+  closest approach, and the reason for any failure) lands in `potentials/md.csv` and is joined into
+  `index.csv`. Also runs standalone: `python -m potmill.md <run_dir>`.
+- The test structure defaults to the **least compressed** of the run's 20 lowest formation-energy
+  configurations (composition removed by a per-element reference fit), replicated past twice the
+  potential cutoff and up to `min_atoms`, then relaxed with the potential under test. Every
+  configuration PotMill generates is entropy-*maximized*, and each part of that rule was forced by a
+  real run: MD from a raw configuration runs away regardless of fit quality (300 K start reaching
+  5700 K); the lowest-energy one routinely has a contact inside ACE's inner cutoff (0.885 Å), so
+  `pair_pace` refuses to evaluate it and every potential looks unstable; and picking on energy alone
+  made the same four potentials come back 4/4 stable from one candidate and 0/4 from another.
+  Compression is measured as `d/(r_i + r_j)` with Pyykkö covalent radii so compositions compare
+  fairly, and the full choice is written to `md/structure.txt`. A user-supplied `structure` is used
+  exactly as given.
+- The collapse check uses the potential's own inner cutoff rather than a fixed distance (a run
+  "passed" with atoms at 0.877 Å under the first 0.5 Å floor), and `relax_box` defaults to 0 —
+  relaxing the cell is more physical but strictly harsher, since an immature potential collapses it
+  (measured: 4/4 failed with box relaxation, 4/4 passed without).
+- Drift is measured on an NVE tail rather than across the NVT leg (where the thermostat, not the
+  potential, sets the total energy); collapse is detected with a neighbour list; an unstable
+  potential is reported as a result (`md_ok = 0` with a reason), never raised.
+
 ## Unreleased — LAMMPS potential export
 
 - Added the `potmill.potential` stage (`[Main] potential`, `[ourPotential]`): the selected fits are

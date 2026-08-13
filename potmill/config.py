@@ -37,6 +37,8 @@ class ConfigManager:
             # potential: write the selected fitted potentials as LAMMPS-ready files at the end of
             # the run (see [ourPotential]). Needs featurize + fit + pareto to be on.
             "potential": 1,
+            # md: MD-test each written potential (see [ourMD]). Needs `potential` to be on.
+            "md": 0,
             "nconfigurations": 1000,
             "batch_size": 1000,
             # device drives the labeling + fitting executors: "cuda" = one GPU per job (today's
@@ -67,6 +69,22 @@ class ConfigManager:
         # (product under KOKKOS, recursive otherwise -- identical results, see potential/mod.py),
         # so there is nothing to configure there.
         "ourPotential": {"which": "pareto"},
+        # MD stability screening of the written potentials. `structure` = "auto" (the run's lowest
+        # formation-energy configuration, replicated) or a path to any ASE-readable file, used as
+        # given. `max_potentials` bounds how many MD tasks are submitted -- the task count must be
+        # fixed at setup time, since how many potentials were written is only known later.
+        "ourMD": {
+            "structure": "auto",
+            "min_atoms": 200,
+            "minimize": 1,
+            "relax_box": 0,
+            "ensemble": "nvt",
+            "temperature": 300.0,
+            "timestep": 0.001,
+            "steps": 10000,
+            "max_potentials": 32,
+            "md_cores_per_job": 1,
+        },
         "ourHyperparameters": {
             "min_rcut": 5.0,
             "max_rcut": 6.5,

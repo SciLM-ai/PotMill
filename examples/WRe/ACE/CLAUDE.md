@@ -34,3 +34,4 @@ When the pipeline runs, it creates:
 - `pareto-front/` - Pareto front results (accuracy vs cost)
 - `pops/` - POPSRegression uncertainty quantification results
 - `potentials/` - LAMMPS-ready potentials for the selected fits (`.yace` + `.mod`) + `index.csv`
+- `md/` - the MD screening test structure (`structure.traj` + its provenance in `structure.txt`)

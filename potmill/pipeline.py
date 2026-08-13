@@ -17,6 +17,7 @@ STAGES = (
     "pareto",
     "pops",
     "potential",
+    "md",
 )
 RUN_DIRS = {
     "entropy": "entropy",
@@ -25,6 +26,7 @@ RUN_DIRS = {
     "fit": "fits",
     "pops": "pops",
     "potential": "potentials",
+    "md": "md",
 }
 
 

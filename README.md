@@ -16,6 +16,7 @@ dynamic load balancer (see `CLAUDE.md` for the architecture).
 4. **Fitting** — least-squares MLIP coefficients across a hyperparameter grid (`fitting/`)
 5. **Pareto front & uncertainty** — accuracy-vs-cost ranking and POPSRegression intervals (`analysis/`, `fitting/`)
 6. **LAMMPS potentials** — the selected fits written as ready-to-run `.yace` + `.mod` files (`potential/`)
+7. **MD screening** — a short trajectory per exported potential, to catch fits that are accurate but unstable (`md/`)
 
 ## Installation
 
@@ -203,6 +204,55 @@ python -m potmill.potential <run_dir> --which pareto
 The coefficients written are fitted on **all** labeled configurations available to that point, not
 on one cross-validation fold, while the reported errors remain the honest k-fold CV values.
 
+### Is the potential stable in MD?
+
+A potential can have an excellent RMSE and still be unusable for dynamics. `[Main] md = 1` runs a
+short MD trajectory with every exported potential — in parallel, one task each — and records the
+outcome in `potentials/md.csv` (also joined into `index.csv`):
+
+| column | meaning |
+|---|---|
+| `md_ok` | survived: no crash, no lost atoms, nothing non-finite, no collapsed pairs |
+| `md_drift_per_atom_per_ps` | NVE total-energy drift — small means forces really are the gradient of the energy |
+| `md_T_final` | final temperature (under `nvt`, a fit that can't hold the thermostat is a red flag) |
+| `md_min_dist` | closest approach in Å; below 0.5 Å the structure collapsed |
+| `md_note` | why it failed, when it did |
+
+By default the test structure comes from the run itself: the **least compressed** of the 20 lowest
+**formation energy per atom** configurations (composition removed by a per-element reference fit),
+replicated until it is at least twice the potential cutoff in every direction and holds `min_atoms`
+atoms, then relaxed with the potential under test.
+
+That two-step choice is not fussiness — every configuration PotMill generates is entropy-*maximized*,
+i.e. deliberately strange. Starting MD from a raw one heats it to thousands of kelvin no matter how
+good the potential is; the lowest-energy one often still has a contact inside ACE's inner cutoff, so
+MD cannot even start and every potential looks broken; and picking purely on energy made the same
+four potentials of one run come back 4/4 stable from one candidate and 0/4 from another. Which
+configuration was used, its energy rank, how compressed it is and how many were skipped are all
+written to `md/structure.txt`. Point `structure` at your own file to test what you actually care
+about — a supplied structure is used exactly as given.
+
+```ini
+[Main]
+md = 1
+
+[ourMD]
+structure = auto        # 'auto', or a path to any ASE-readable structure (used as-is)
+min_atoms = 200         # replicate the auto-picked cell up to at least this many atoms
+minimize = 1            # relax with the potential before starting MD
+ensemble = nvt          # nvt | nve
+temperature = 300       # K
+timestep = 0.001        # ps
+steps = 10000
+max_potentials = 32     # how many potentials to test (bounds the number of MD tasks)
+```
+
+The same screening runs standalone on any run that already has potentials:
+
+```bash
+python -m potmill.md <run_dir> --steps 20000 --temperature 600
+```
+
 ### Re-checking a potential
 
 The exported files are verified against the fitted model in the test suite, so the pipeline does not
@@ -223,8 +273,9 @@ The pipeline reads `config.ini` (parsed by `potmill.config.ConfigManager`). Sect
 
 - **"our" sections** — PotMill's own parameters with documented defaults in `ConfigManager.DEFAULTS`:
   `[Main]` (stage toggles + global counts), `[FitSNAP]` (MLIP + elements), and the per-stage
-  `[ourStructureGen]`, `[ourLabeling]`, `[ourFeaturization]`, `[ourFit]`, `[ourPotential]`, plus
-  `[ourHyperparameters]` (the swept rcut/nmax/lmax/twojmax/eweight grid). Unknown keys are warned about.
+  `[ourStructureGen]`, `[ourLabeling]`, `[ourFeaturization]`, `[ourFit]`, `[ourPotential]`,
+  `[ourMD]`, plus `[ourHyperparameters]` (the swept rcut/nmax/lmax/twojmax/eweight grid). Unknown
+  keys are warned about.
 - **passthrough sections** — keyword arguments forwarded verbatim to external calculator classes
   (`[FAIRChemCalculator]`, `[Vasp]`, `[LAMMPS]`); omitted keys fall back to that library's defaults.
 
