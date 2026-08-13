@@ -43,42 +43,30 @@ def min_interatomic_distance(atoms, cutoff=3.0):
     return float(distances.min()) if len(distances) else None
 
 
-_RADII = {}
-
-
-def _covalent_radii():
-    """Pyykko covalent radii in A, from the same mendeleev table ``structuregen`` samples."""
-    if not _RADII:
-        from mendeleev.fetch import fetch_table
-
-        table = fetch_table("elements")  # a full DB read -- do it once, not per candidate
-        _RADII.update(zip(table["symbol"], table["covalent_radius_pyykko"] / 100.0, strict=False))
-    return _RADII
-
-
 def compression(atoms, cutoff=3.5):
-    """How compressed the tightest contact is, as ``d / (r_i + r_j)`` with Pyykko covalent radii.
+    """How compressed the tightest contact is, as ``d / (r_i + r_j)`` with covalent radii.
 
     1.0 means the closest pair sits exactly at the sum of its covalent radii; below 1.0 it is
     squeezed. Normalizing by the PAIR's radii is what makes candidates comparable across
     compositions -- a raw distance would always favour the tungsten-rich cells over the
     hydrogen-rich ones simply because tungsten is bigger.
+
+    Radii come from ``ase.data`` rather than the mendeleev table ``structuregen`` samples: only the
+    RANKING of candidates matters here, ase is a hard dependency everywhere this runs (mendeleev is
+    not -- it is absent from the CI test environment), and ase.data needs no database read.
     """
+    import numpy as np
+    from ase.data import covalent_radii
     from ase.neighborlist import neighbor_list
 
     if len(atoms) < 2:
         return None
-    radii = _covalent_radii()
-    symbols = atoms.get_chemical_symbols()
+    numbers = atoms.get_atomic_numbers()
     i, j, d = neighbor_list("ijd", atoms, cutoff)
     if not len(d):
         return None
-    ratios = [
-        dist / (radii[symbols[a]] + radii[symbols[b]])
-        for a, b, dist in zip(i, j, d, strict=False)
-        if symbols[a] in radii and symbols[b] in radii
-    ]
-    return float(min(ratios)) if ratios else None
+    pair_radii = covalent_radii[numbers[i]] + covalent_radii[numbers[j]]
+    return float(np.min(d / pair_radii))
 
 
 def structures_by_job_ids(run_dir, wanted):
