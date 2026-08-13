@@ -249,9 +249,15 @@ Facts that are easy to get wrong, all established by measurement:
   (what the checkpoint's RMSEs describe), printing a NOTE when they differ. Equal for a finished run.
   Snapshotting states per checkpoint is not an option: they are `n_fold * 10 * (p+1)^2 * 8` bytes --
   measured 4.1 MB at p=174, and 378 MB per subset at p=1254, i.e. ~20 GB for one snapshot of the
-  HBeW grid. FUTURE (planned, own commit): have `foldfit` also write the merged all-data beta into
-  its per-batch `betas_{pid}.bin` (fold `-1`) -- tiny, makes coefficients and errors align by
-  construction for ANY batch, and costs ~3% more fit work at production batch size. It must NOT be
+  HBeW grid. TRIED AND REJECTED (do not re-attempt without new evidence): having `foldfit` write the
+  merged all-data beta into its per-batch `betas_{pid}.bin` (fold `-1`) would align coefficients and
+  errors by construction for ANY batch and make the export near-instant, but it was IMPLEMENTED and
+  MEASURED at **+23.6% fit work on GPU** (p=1254, 40k rows, 5 eweights: 5.87 s -> 7.25 s per link;
+  +18.7% at p=400; ~+25% on CPU). The cost is one extra SVD per eweight and is intrinsic -- hoisting
+  the eweight-independent merge out of the loop only recovered 2 points. On the 100k GRACE run that
+  is +8 min on a 33 min fit tail, i.e. ~7% of every run, forever, to remove one CSV column and make
+  a rare historical-batch export exact. The reconstruction below is already validated exact (1e-11
+  vs a one-shot fit) and the two counts are equal for any completed run. It must NOT be
   written into `results_*.csv`, which pareto averages over folds.
 - Gotchas when touching this code: `featurize()` chdirs into its feature directory and never returns
   (save/restore cwd, and keep run paths absolute); LAMMPS forces must come from `gather_atoms`
