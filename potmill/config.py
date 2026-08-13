@@ -34,6 +34,9 @@ class ConfigManager:
             "fit": 1,
             "pareto": 1,
             "pops": 0,
+            # potential: write the selected fitted potentials as LAMMPS-ready files at the end of
+            # the run (see [ourPotential]). Needs featurize + fit + pareto to be on.
+            "potential": 1,
             "nconfigurations": 1000,
             "batch_size": 1000,
             # device drives the labeling + fitting executors: "cuda" = one GPU per job (today's
@@ -59,6 +62,11 @@ class ConfigManager:
             "fit_engine": "incremental",
             "fit_cores_per_job": 1,
         },
+        # LAMMPS potential export: which fitted hyperparameter points to write
+        # (none | knee | pareto | all). The written .mod picks its pace evaluator at runtime
+        # (product under KOKKOS, recursive otherwise -- identical results, see potential/mod.py),
+        # so there is nothing to configure there.
+        "ourPotential": {"which": "pareto"},
         "ourHyperparameters": {
             "min_rcut": 5.0,
             "max_rcut": 6.5,
@@ -118,9 +126,20 @@ class ConfigManager:
         return self._config
 
     def validate(self, fitsnap_config):
-        """Warn (do NOT override -- users may have custom pair_style setups) when the FitSNAP.in
-        [REFERENCE] pair_style cutoff is below [ourHyperparameters] max_rcut. LAMMPS compute pace
-        aborts every featurize task with rcut > pair_style cutoff (src/ML-PACE/compute_pace.cpp:129)."""
+        """Startup checks that would otherwise only surface hours into a run.
+
+        1. The LAMMPS potential export supports ACE only -- say so at t=0, not after the last fit.
+        2. Warn (do NOT override -- users may have custom pair_style setups) when the FitSNAP.in
+           [REFERENCE] pair_style cutoff is below [ourHyperparameters] max_rcut. LAMMPS compute pace
+           aborts every featurize task with rcut > pair_style cutoff
+           (src/ML-PACE/compute_pace.cpp:129)."""
+        if self._config["Main"]["potential"] and self._config["FitSNAP"]["mlip"] != "ACE":
+            print(
+                f"WARNING: [Main] potential = 1 but [FitSNAP] mlip = "
+                f"{self._config['FitSNAP']['mlip']}; the LAMMPS potential export supports ACE only "
+                f"and will fail at the end of this run. Set [Main] potential = 0 to skip it.",
+                flush=True,
+            )
         match = re.match(
             r"\s*zero\s+([0-9.]+)", fitsnap_config.get("REFERENCE", {}).get("pair_style", "")
         )

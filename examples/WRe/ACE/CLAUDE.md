@@ -33,3 +33,4 @@ When the pipeline runs, it creates:
 - `costs/` - Computational cost measurements for Pareto analysis
 - `pareto-front/` - Pareto front results (accuracy vs cost)
 - `pops/` - POPSRegression uncertainty quantification results
+- `potentials/` - LAMMPS-ready potentials for the selected fits (`.yace` + `.mod`) + `index.csv`

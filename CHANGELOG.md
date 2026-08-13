@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased — LAMMPS potential export
+
+- Added the `potmill.potential` stage (`[Main] potential`, `[ourPotential]`): the selected fits are
+  written as ready-to-run LAMMPS potentials (`potentials/<point>/<point>.yace` + `.mod`, plus one
+  `index.csv` with hyperparameters, k-fold CV RMSEs and cost). `which` = `none | knee | pareto | all`.
+  The same code runs as a CLI for finished runs: `python -m potmill.potential <run_dir>`.
+- Shipped coefficients are the ALL-DATA fit, recovered exactly from the per-fold R-factors already
+  saved by `foldfit` (each row is in exactly `k-1` training sets, so QR-merging the k solve R's gives
+  the full design matrix's R up to a scale that cancels in the LS solve) — no extra work during the
+  run and no cumulative-design-matrix reload. Validated against a one-shot `lstsq` in
+  `tests/test_potential.py`; `fit_engine = rows` computes the same estimator directly.
+- Each written potential carries only its own (nmax, lmax) basis rather than the full swept basis
+  padded with zeros, with coefficients attached by symbolic descriptor label and the label sets
+  asserted equal per element first.
+- Rewrote the `.yace` `E0:` line at full precision — `AcePot.write_pot` formats it with `'%f'`, which
+  alone shifted energies by ~2e-7 eV/atom. LAMMPS then reproduces the fitted model to ~1e-13 eV/atom
+  and ~1e-12 eV/A (verified on the HBeW 5000-config run, and per-basis in the test suite).
+- The `.mod` picks its pace evaluator at runtime (`is_active(package,kokkos)` → `product`, else
+  `recursive`). The two are identical numerically (<1e-15 eV/atom, ranks 1..4) but `recursive` is
+  ~18% faster on CPU at a production basis while KOKKOS rejects it outright
+  (`pair_pace_kokkos.cpp:570`), so hardcoding either would cost speed or abort every GPU run. GPU
+  needs no different file — `-sf kk` selects `pace/kk`. A non-`zero` `[REFERENCE] pair_style` is
+  passed through for `hybrid` and raises otherwise.
+- Interrupted runs export from the latest completed checkpoint. Because each hyperparameter point's
+  fit accumulates continuously while errors are only written at synchronised checkpoints, `index.csv`
+  reports `n_configs` (what each potential's coefficients saw, read from its own fit state) next to
+  `n_configs_errors` (what its RMSEs describe), with a NOTE when they differ; equal for a finished run.
+- The LAMMPS energy/force cross-check is not part of the pipeline: it tests the writer and the
+  installed FitSNAP/LAMMPS rather than the run. It stays in `tests/test_potential.py` and behind
+  `python -m potmill.potential <run> --verify N` (worth running after upgrading either package).
+
 ## Unreleased — CPU + VASP full-pipeline path
 
 - Added a `[Main] device = cuda | cpu` switch and a uniform per-stage layout scheme

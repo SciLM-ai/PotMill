@@ -21,6 +21,7 @@ PotMill is an HPC pipeline that iteratively generates training data for machine 
 4. **Fitting** - least-squares fitting of MLIP coefficients across hyperparameter grid
 5. **Pareto front** - identifies optimal hyperparameters balancing accuracy vs computational cost
 6. **Uncertainty quantification** - POPSRegression for prediction intervals
+7. **LAMMPS potential export** - writes the selected fits as ready-to-run LAMMPS potentials
 
 ## Architecture
 
@@ -95,6 +96,13 @@ potmill/
   featurization/       # FitSNAP ACE/SNAP featurization
   fitting/             # Least-squares fitting (fit.py, foldfit) + POPSRegression UQ (pops.py)
   analysis/            # Pareto front (pareto.py) + monitor plotting (plot_monitor.py)
+  potential/           # LAMMPS potential export ([Main] potential)
+    export.py          # point selection (none|knee|pareto|all), index.csv, per-point error isolation
+    betas.py           # ALL-DATA coefficients merged from the per-fold R-factors (see below)
+    labels.py          # ACE descriptor-label reconstruction (blist + symbolic nu), asserted vs featurize
+    ace.py             # beta -> AcePot -> .yace (minimal basis; coefficients attached BY LABEL)
+    mod.py             # .mod include file; [REFERENCE] zero / hybrid handling
+    verify.py          # LAMMPS vs natoms*(a_E@beta) / a_F@beta cross-check + NVE MD probe
 ```
 
 Tests live in `tests/` (stdlib `unittest`); run them with `python -m unittest discover -s tests`.
@@ -152,6 +160,7 @@ to external calculators. Key sections:
 - `[ourFeaturization]`: `featurize_jobs_per_node`, `featurize_cores_per_job`
 - `[ourFit]`: `fit_jobs_per_node`, `fit_cores_per_job`, `fit_method`, `n_fold`, `fit_engine`
 - Per-stage layout is uniform: each stage has `<stage>_jobs_per_node` concurrent jobs of `<stage>_cores_per_job` cores. In `cuda` mode each labeling/fit job takes one GPU; in `cpu` mode each takes its cores and `worker_layout` checks the per-node sum leaves cores free for the dynamic executor.
+- `[ourPotential]`: `which` = `none` | `knee` | `pareto` (default) | `all` (its only key -- the written `.mod` chooses its pace evaluator at runtime, see below)
 - `[ourHyperparameters]`: the swept grid (`min/max_rcut`, `num_rcut`, `min/max_nmax`, `min/max_lmax`, `min/max_twojmax`, `middle_eweight`, `num_eweights`)
 - `[FAIRChemCalculator]`, `[Vasp]`, `[LAMMPS]`: passthrough kwargs for the chosen labeling backend
 
@@ -180,6 +189,84 @@ this is not a substitute for fixing FitSNAP.in.)
 
 **Agents: if you see the `WARNING: FitSNAP.in [REFERENCE] pair_style cutoff ...` line at startup,
 surface it to the user immediately and propose the one-line fix to FitSNAP.in.**
+
+## LAMMPS potential export (`potmill/potential/`)
+
+`[Main] potential = 1` ends a run by writing the selected fits (default: the whole Pareto front) as
+`potentials/<point>/<point>.yace` + `.mod`, plus one `potentials/index.csv` carrying each point's
+hyperparameters, k-fold CV RMSEs and cost. The same code is a CLI for finished runs:
+`python -m potmill.potential <run_dir> [--which ...] [--verify N] [--md-steps N]`.
+The stage is submitted UPFRONT into the dynamic `exe` with its dependencies as futures (final
+featurization for descriptor labels, final pareto for the selection, final fit chain for the
+accumulated state), so it does not serialize anything.
+
+Facts that are easy to get wrong, all established by measurement:
+
+- **The evaluator must be chosen at RUNTIME, not written into the file.** `pair_style pace` has two
+  algorithms, `product` and `recursive`, which produce identical energies and forces (<1e-15 eV/atom
+  across ranks 1..4, lmax<=4, bases to 4308 columns). `recursive` is ~18% faster on CPU at a
+  production basis (1254 columns: 86.7 vs 106.0 us/atom/step, same at 250 and 1024 atoms) -- but
+  `src/KOKKOS/pair_pace_kokkos.cpp:570` hard-errors on it (`"Must use 'product' algorithm with pair
+  pace/kk on the GPU"`), inside `compute()` with no execution-space branch, and `pace/kk/host` is a
+  registered style too. So the rule is KOKKOS => product, not merely GPU => product; a `.mod` that
+  hardcodes `recursive` aborts every `-sf kk` run. The writer emits
+  `if "$(is_active(package,kokkos))" then "pair_style pace product" else "pair_style pace recursive"`
+  so the user never chooses (and FitSNAP's hardcoded `product` is explained: it is the safe half).
+
+- **ALL-DATA coefficients, for free.** A shipped potential must not be one CV fold's fit (that
+  throws away 1/k of the data), and re-fitting from the cumulative design matrix is the O(N^2)
+  reload the incremental engine exists to avoid. Because the k test sets PARTITION the data, every
+  row is in exactly `k-1` training sets, so QR-merging the k saved augmented solve R-factors gives
+  the R of `sqrt(k-1) x` the full weighted design matrix — and an LS solution from an augmented R is
+  scale-invariant, so that factor cancels. Only the global normalizations are rescaled
+  (`Sw_full = sum_f Sw_f / (k-1)`). `tests/test_potential.py` pins this against a one-shot `lstsq`.
+- **A swept (nmax, lmax) point is a genuine ACE basis.** The column-filtered full label list is set-
+  AND order-identical to the labels generated directly at that point's nmax/lmax (verified for the
+  HBeW grid), so each potential carries only its own functions — minimal basis, fastest MD — instead
+  of the full basis padded with zeros. Coefficients are still attached BY SYMBOLIC LABEL (`nu`), and
+  the label sets are asserted equal per element before anything is written.
+- **`AcePot.write_pot` truncates E0 to six decimals** (`'%f'`, while every other number goes through
+  `json.dumps`). That alone shifted energies by ~2e-7 eV/atom with forces still exact (E0 is a
+  constant). `ace._rewrite_e0_full_precision` rewrites the line; agreement then goes to ~1e-13.
+- **Both pace evaluators are exact**; `recursive` (LAMMPS's default, ~10% faster than FitSNAP's
+  hardcoded `product` on a 250-atom NVE benchmark) is the default. Measured `<1e-15` eV/atom vs the
+  fitted model for ranks 1..4, lmax up to 4, bases up to 4308 columns.
+- **`bzeroflag = 1` is refused**: `featurize` always prepends a `[[0]]` constant label per element,
+  which bzeroflag=1 removes from the design matrix, so such a run's fit is already inconsistent.
+- **Interrupted runs are supported, and that is why `index.csv` has two configuration counts.**
+  `foldfit` rewrites each subset's `state.pt` IN PLACE every batch, so a past batch's fit state does
+  not exist anywhere; errors and the Pareto ranking, by contrast, are only written at synchronised
+  checkpoints (`results_<b>.csv` appears once every subset has folded batch b). Chains advance
+  independently -- a 1254-column subset takes far longer per link than a 174-column one -- so a
+  killed run leaves points ahead of the last checkpoint by differing amounts. The export therefore
+  takes the newest checkpoint and reports BOTH `n_configs` (per potential, read from its own
+  accumulator: `n[('tr','E')] + n[('te','E')]`, asserted equal across folds) and `n_configs_errors`
+  (what the checkpoint's RMSEs describe), printing a NOTE when they differ. Equal for a finished run.
+  Snapshotting states per checkpoint is not an option: they are `n_fold * 10 * (p+1)^2 * 8` bytes --
+  measured 4.1 MB at p=174, and 378 MB per subset at p=1254, i.e. ~20 GB for one snapshot of the
+  HBeW grid. FUTURE (planned, own commit): have `foldfit` also write the merged all-data beta into
+  its per-batch `betas_{pid}.bin` (fold `-1`) -- tiny, makes coefficients and errors align by
+  construction for ANY batch, and costs ~3% more fit work at production batch size. It must NOT be
+  written into `results_*.csv`, which pareto averages over folds.
+- Gotchas when touching this code: `featurize()` chdirs into its feature directory and never returns
+  (save/restore cwd, and keep run paths absolute); LAMMPS forces must come from `gather_atoms`
+  (`extract_atom("f")` is dimensioned `[0:nmax]` and includes ghost atoms); the `.mod` refers to its
+  `.yace` by bare filename, so LAMMPS must run with cwd = the potential dir.
+
+Verification lives in `potential/verify.py` and is the definition of correct here: LAMMPS energy and
+forces vs `natoms*(a_E@beta)` and `a_F@beta` from a fresh FitSNAP featurization of the same
+structure. On the HBeW 5000-config run this agrees to ~1e-13 eV/atom and ~1e-12 eV/A.
+
+**It is deliberately NOT a pipeline stage.** Two different questions get called "verification" here:
+the writer's structural checks (labels vs featurization, coefficient counts, per-element blocks)
+catch per-RUN problems -- an edited grid, a FitSNAP that reordered the basis -- and stay in the
+export. Re-deriving energies through LAMMPS tests the writer and the installed FitSNAP/LAMMPS, which
+do not vary run to run, so running it every run re-proves the same fact; it lives in
+`tests/test_potential.py` (CI) and behind `--verify` for use after upgrading either package.
+`--md-steps` runs a short NVE probe (energy drift). A real MD STABILITY stage -- a different
+question entirely, a property of the fit rather than of the file -- is planned separately as
+`[Main] md` / `[ourMD]`: lowest-formation-energy structure (reuse `_recon.formation_energy`),
+replicate to a few hundred atoms, minimize, then NVT/NVE per potential as parallel tasks.
 
 ## Dependencies
 

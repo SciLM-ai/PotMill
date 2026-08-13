@@ -15,6 +15,7 @@ dynamic load balancer (see `CLAUDE.md` for the architecture).
 3. **Featurization** — ACE/SNAP descriptors via FitSNAP (`featurization/`)
 4. **Fitting** — least-squares MLIP coefficients across a hyperparameter grid (`fitting/`)
 5. **Pareto front & uncertainty** — accuracy-vs-cost ranking and POPSRegression intervals (`analysis/`, `fitting/`)
+6. **LAMMPS potentials** — the selected fits written as ready-to-run `.yace` + `.mod` files (`potential/`)
 
 ## Installation
 
@@ -136,19 +137,101 @@ After a run, plot the resource/stage monitor with:
 python -m potmill.analysis.plot_monitor pipeline_monitor.csv
 ```
 
+## Running MD with a fitted potential
+
+With `[Main] potential = 1` (the default), the run ends by writing the selected fits as LAMMPS
+potentials — by default every point on the Pareto front:
+
+```
+potentials/
+  index.csv                                          # hyperparameters + CV RMSEs + cost per potential
+  rcut_5.0__nmax_9_4__lmax_0_4__eweight_10.0/
+      rcut_5.0__nmax_9_4__lmax_0_4__eweight_10.0.yace   # the potential
+      rcut_5.0__nmax_9_4__lmax_0_4__eweight_10.0.mod    # pair_style + pair_coeff + element mapping
+```
+
+Use one from any LAMMPS input script — `include` the `.mod` after `read_data`:
+
+```lammps
+units metal
+atom_style atomic
+read_data my_structure.data
+include rcut_5.0__nmax_9_4__lmax_0_4__eweight_10.0.mod
+fix 1 all nve
+run 10000
+```
+
+The same files run on **CPU** (`lmp -in in.lammps`) and on **GPU** via KOKKOS — there is no separate
+GPU potential file; `-sf kk` selects `pace/kk` automatically:
+
+```bash
+srun -n 4 lmp -k on g 4 -sf kk -pk kokkos newton on neigh half -in in.lammps
+```
+
+**Why the `.mod` contains an `if` line.** LAMMPS has two interchangeable algorithms for evaluating
+an ACE potential, `product` and `recursive`. They give identical energies and forces; `recursive` is
+~18% faster on CPU, but LAMMPS's KOKKOS build *rejects* it (`pair_pace_kokkos.cpp:570` — so any
+`-sf kk` run would abort). Rather than make you pick — and discover the problem on your first GPU
+job — the `.mod` asks LAMMPS at runtime which one is valid. You never have to think about it.
+
+### What's in `index.csv`
+
+One row per exported potential: its hyperparameters, its k-fold cross-validated RMSEs (energy and
+force, train and test), its featurization `cost`, whether it sits on the `pareto_front`, whether it
+is the `knee` (the accuracy-favouring pick on the front), and two configuration counts:
+
+| column | meaning |
+|---|---|
+| `n_configs` | how many configurations **this potential's coefficients** were fitted on |
+| `n_configs_errors` | how many configurations the **RMSE and cost columns** describe |
+
+They are equal for a run that finished. They can differ **only if you stopped a run mid-way**: the
+fit for each hyperparameter point accumulates batch by batch and keeps going, while errors and the
+Pareto ranking are computed at synchronised checkpoints, so an interrupted run leaves some points
+having consumed a batch or two beyond the last checkpoint. That is harmless — the extra data only
+improves those potentials, and the ranking is still a fair comparison because every point was ranked
+on the same checkpoint — but the export prints a `NOTE:` and records both numbers rather than let
+you assume they match.
+
+**Stopping a run early is fully supported.** The export always uses the latest *completed*
+checkpoint, so if you kill a job once the errors have converged you still get potentials:
+
+```bash
+python -m potmill.potential <run_dir> --which pareto
+```
+
+The coefficients written are fitted on **all** labeled configurations available to that point, not
+on one cross-validation fold, while the reported errors remain the honest k-fold CV values.
+
+### Re-checking a potential
+
+The exported files are verified against the fitted model in the test suite, so the pipeline does not
+re-check them on every run. Worth running yourself **after upgrading FitSNAP or LAMMPS**, since that
+is what could change the answer:
+
+```bash
+python -m potmill.potential <run_dir> --which knee --verify 3 --md-steps 2000
+```
+
+`--verify N` runs LAMMPS on N labeled structures and compares its energies and forces against the
+fitted model (agreement is ~1e-13 eV/atom); `--md-steps` additionally runs a short NVE trajectory
+and reports the energy drift.
+
 ## Configuration
 
 The pipeline reads `config.ini` (parsed by `potmill.config.ConfigManager`). Sections are of two kinds:
 
 - **"our" sections** — PotMill's own parameters with documented defaults in `ConfigManager.DEFAULTS`:
   `[Main]` (stage toggles + global counts), `[FitSNAP]` (MLIP + elements), and the per-stage
-  `[ourStructureGen]`, `[ourLabeling]`, `[ourFeaturization]`, `[ourFit]`, plus `[ourHyperparameters]`
-  (the swept rcut/nmax/lmax/twojmax/eweight grid). Unknown keys are warned about.
+  `[ourStructureGen]`, `[ourLabeling]`, `[ourFeaturization]`, `[ourFit]`, `[ourPotential]`, plus
+  `[ourHyperparameters]` (the swept rcut/nmax/lmax/twojmax/eweight grid). Unknown keys are warned about.
 - **passthrough sections** — keyword arguments forwarded verbatim to external calculator classes
   (`[FAIRChemCalculator]`, `[Vasp]`, `[LAMMPS]`); omitted keys fall back to that library's defaults.
 
 The labeling backend is selected by `[ourLabeling] calculator` (`FAIRChemCalculator`, `Vasp`, or
 `LAMMPS`). A single `[Main] device` = `cpu` or `cuda` drives both labeling and fitting placement.
+Which fits become LAMMPS potentials is set by `[ourPotential] which` = `none` | `knee` | `pareto`
+(default) | `all` — the only key that stage needs.
 
 See `examples/` for complete, runnable configs (`HBeW/ACE` is the multi-element UMA reference).
 

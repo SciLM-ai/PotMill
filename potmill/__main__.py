@@ -19,6 +19,7 @@ from potmill.pipeline import (
     prepare_run_dirs,
     task_counts,
 )
+from potmill.potential.export import export_potentials_task
 from potmill.resources import query_flux, worker_layout
 from potmill.tools import (
     combined_ace_hyperparameters,
@@ -55,6 +56,7 @@ def main():
     fit_mode = config["Main"]["fit"]
     pareto_mode = config["Main"]["pareto"]
     pops_mode = config["Main"]["pops"]
+    potential_mode = config["Main"]["potential"]
     nconfigurations = config["Main"]["nconfigurations"]
     batch_size = config["Main"]["batch_size"]
     device = config["Main"]["device"]  # cuda | cpu -- drives labeling + fitting placement
@@ -127,6 +129,7 @@ def main():
     cost_futures = []
     pareto_futures = []
     pops_futures = []
+    potential_futures = []
 
     featurize_cores_per_job = res.featurize_cores_per_job
     print(
@@ -494,6 +497,42 @@ def main():
                                 fs.task_ = i
                                 pops_futures.append(fs)
 
+                        if potential_mode:
+                            # One task, submitted UPFRONT like everything else: its dependencies are
+                            # futures (final featurization for the descriptor labels, final pareto for
+                            # the selection + errors, final fit chain for the accumulated state), so
+                            # executorlib starts it the moment those resolve. Nothing here inspects a
+                            # future's result, so the dynamic overlap is untouched.
+                            if feature_mode and fit_mode and pareto_mode:
+                                print("POTENTIAL jobs submission...", flush=True)
+                                pot_cfg = config["ourPotential"]
+                                fs = exe.submit(
+                                    export_potentials_task,
+                                    start_path,
+                                    pot_cfg["which"],
+                                    featurization_futures[-1][0],
+                                    pareto_futures[-1],
+                                    fitting_futures[-1],
+                                    resource_dict={
+                                        "cores": 1,
+                                        "gpus_per_core": 0,
+                                        "num_nodes": 1,
+                                        "cwd": start_path + "potentials",
+                                        "error_log_file": "error.out",
+                                        "priority": 8,
+                                    },
+                                )
+                                fs.task_ = 0
+                                potential_futures.append(fs)
+                            else:
+                                print(
+                                    "WARNING: [Main] potential = 1 but the LAMMPS potential export "
+                                    "needs featurize + fit + pareto (it reads the descriptor labels, "
+                                    "the accumulated fit state and the Pareto results); NO potentials "
+                                    "will be written for this run.",
+                                    flush=True,
+                                )
+
                         b_futures = b_futures[1:]
                         num_b_futures = len(b_futures)
                         entropy_exe_shutdown = False
@@ -632,6 +671,13 @@ def main():
                                     pops_futures, "POPS", len(fits_idx)
                                 )
 
+                            if potential_futures:
+                                # Keeps the loop alive until the potentials are on disk: the pipeline
+                                # force-exits the moment total_n_futures hits 0.
+                                potential_futures = check_and_print_status(
+                                    potential_futures, "POTENTIAL", 1
+                                )
+
                             total_n_futures = (
                                 len(entropy_atoms_futures)
                                 + len(labeling_futures)
@@ -641,6 +687,7 @@ def main():
                                 + len(cost_futures)
                                 + len(pareto_futures)
                                 + len(pops_futures)
+                                + len(potential_futures)
                             )
 
                             monitor.update_task_counts(
