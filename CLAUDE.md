@@ -277,20 +277,43 @@ writer, constant per install) but "is this FIT usable for dynamics?" -- a proper
 coverage and hyperparameters, which is why it runs per potential and belongs next to the Pareto
 table. Results land in `potentials/md.csv` (authoritative) and are joined into `index.csv`.
 
-**Known property of every FitSNAP-generated ACE potential: there is no repulsive core.** The `.yace`
-carries `prehc: 0` (AcePot never writes a hard-core term) and `rcut_in` switches the ACE contribution
-off below `rcinner`. Measured on a real exported potential (W-W, `rcinner = 1.0`, `drcinner = 0.01`):
-`+62.4 eV` at 1.00 A with a repulsive force of 195 eV/A, then a **74 eV step down over 0.01 A** to a
-perfectly flat `-11.96 eV` plateau with EXACTLY ZERO force -- and that trapped state is far below the
-real bonded minimum (`-2.5 eV` at 2.4 A). Any pair that crosses falls in, cannot come out, and
-releases 74 eV of heat that pushes further pairs over. Two things follow: (a) collapse verdicts
-cluster just inside `rcinner`, which is the signature to look for; (b) a post-hoc ZBL overlay does
-NOT rescue such a potential (tested: it restores a 3275 eV wall at 0.6 A and leaves r >= 2 A
-untouched, yet MD still collapsed) because the trap sits underneath it. Setting `rcinner = 0` removes
-the cliff but is not a fix either -- tested end to end, it made the energy RMSE ~20x worse (20.1 vs
-1.02) and the toy potentials still collapsed. Well-trained potentials simply never reach that region,
-which is why they are stable; if short-range robustness is ever needed, the fix belongs in the FIT
-(a ZBL reference in `FitSNAP.in [REFERENCE]`, which the .mod writer already supports), not the export.
+### `rcinner` builds an atom trap into every exported potential
+
+**What the parameter does** (`ML-PACE/ace-evaluator/ace_radial.cpp`, `ACERadialFunctions::radbase`):
+`rcinner`/`drcinner` in `FitSNAP.in [ACE]` become the yace `rcut_in`/`dcut_in`. For any pair with
+`r <= rcut_in - dcut_in` the code does `gr.fill(0); dgr.fill(0)` -- EVERY radial basis function is
+set to zero, so the two atoms become completely invisible to each other. Between `rcut_in - dcut_in`
+and `rcut_in` a 5th-order polynomial ramps the basis back in (`cutoff_func_poly`, line 220). The
+mechanism exists so ACE can hand over to a core repulsion at short range -- but that core term is
+`prehc * exp(-lambdahc r^2)` and FitSNAP's `AcePot` always writes **`prehc: 0`**, so it hands over
+to nothing at all.
+
+**The consequence, measured on real exported potentials** (W-W, `rcinner = 1.0`, `drcinner = 0.01`):
+
+| r (A) | 0.80 | 0.95 | 0.99 | 1.00 | 1.05 | 2.40 |
+|---|---|---|---|---|---|---|
+| E (eV) | -4.53 | -4.53 | -4.53 | +679.86 | +515.37 | -6.95 |
+| force | 0.0 | 0.0 | 0.0 | -3728 | -2884 | -4.3 |
+
+Below 0.99 A the energy is exactly the sum of the per-element `E0` constants and the force is
+IDENTICALLY ZERO, bounded from inside by a ~680 eV wall. A pair that crosses can never come back and
+releases that energy as heat, which pushes further pairs over. Collapse verdicts clustering just
+inside `rcinner` are this trap, and a post-hoc ZBL overlay does not rescue it (tested: restores a
+3275 eV wall at 0.6 A, leaves r >= 2 A untouched, MD still collapsed) because the trap sits
+underneath the overlay.
+
+**`rcinner = 0` removes it and does not cost accuracy.** With no inner cutoff the same fit produces a
+genuine repulsive wall (2234 eV at 0.80 A, force -11120 eV/A pushing apart) because a third of the
+training configurations already contain pairs closer than 1.0 A for it to learn from. A CONTROLLED
+A/B -- same 300 configurations, same labels, same hyperparameters, only `rcinner` differing -- gives
+test RMSE 1.174 eV/atom and 3.009 eV/A at `rcinner = 0` versus 1.366 and 3.062 as shipped, and
+identical descriptor magnitudes (max |a| = 3.73e3 both ways). FitSNAP's own default is `0.0`.
+(An earlier note here claimed `rcinner = 0` made errors ~20x worse. That was WRONG: it compared two
+different pipeline runs with different random structures and never isolated the parameter.)
+
+**What `rcinner = 0` does NOT fix** is a weak fit: with 300 configurations the potential still drove
+an H-containing pair to 0.354 A. Short-range behaviour is only as good as the data, which is why
+well-trained potentials are stable either way.
 
 - **The test structure is the whole problem.** Every configuration the pipeline generates is entropy
   MAXIMIZED -- deliberately strange and 2-25 atoms. MD from a raw one runs away regardless of fit
@@ -326,11 +349,18 @@ which is why they are stable; if short-range robustness is ever needed, the fix 
   because it is broken: on well-trained potentials it is measured to work (6/6 stable, compression
   unchanged at 0.76-0.83). On under-trained ones it collapses the cell -- correctly, since for those
   the collapsed state really is the energy minimum.
+- **The timestep default is 0.5 fs, not the usual 1 fs.** These screens run stiff, immature
+  potentials on hydrogen-containing systems. Measured on the same potential and structure: 1 fs lost
+  an atom outright (LAMMPS "Lost atoms"), while 0.2 fs integrated cleanly (drift 1e-5 eV/atom/ps) and
+  turned the failure into an honest physical verdict. A "Lost atoms" note therefore means the
+  INTEGRATION failed -- try a smaller timestep before blaming the fit.
+- **`md_closest_pair` names the elements that collapsed** ("H-W at 0.354 A = 0.43x"). Which
+  interaction failed is what tells you where the fit needs data; a bare distance does not.
 - **What a real verdict looks like.** 5000-config HBeW potentials: 3/3 stable, compression 0.76-0.81
   after minimization and unchanged after 2000 steps. 40-config toy runs: LAMMPS aborts or atoms at
   0.30-0.39x bond length. The stage is separating good fits from bad ones, which is its whole job --
-  do NOT read a failure as a bug in the stage without first checking `md_compression` and the
-  training-set size.
+  do NOT read a failure as a bug in the stage without first checking `md_compression`,
+  `md_closest_pair`, the timestep and the training-set size.
 - **Drift is measured on an NVE tail, never under the thermostat.** Under `nvt` the total energy is
   the thermostat's to change, so drift across the NVT leg measures nothing; the runner switches to
   NVE for `steps/10` at the end and measures there.

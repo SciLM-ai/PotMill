@@ -28,12 +28,20 @@
   (3/3, compression 0.76–0.81 unchanged through 2000 steps, and 6/6 including with `relax_box = 1`),
   while 40-configuration toy runs collapse. `relax_box` defaults to 0 — it is measured to work on
   well-trained potentials, so the default is simply the plain reading of "minimize the structure".
-- Documented a property of every FitSNAP-generated ACE potential found while validating this: the
-  `.yace` has no core repulsion (`prehc: 0`) and `rcinner` switches ACE off below the inner cutoff,
-  producing a 74 eV step over 0.01 Å into a force-free well *below* the bonded minimum. Collapse
-  verdicts clustering just inside `rcinner` are that trap; a post-hoc ZBL overlay does not rescue it,
-  and `rcinner = 0` costs ~20x energy RMSE without fixing it — the remedy, if ever needed, is a ZBL
-  reference in the fit itself.
+- `timestep` defaults to 0.5 fs rather than 1 fs, and `md_closest_pair` records which elements
+  collapsed. Measured: at 1 fs LAMMPS lost an atom outright on a stiff potential, while 0.2 fs on the
+  same potential and structure integrated cleanly (drift 1e-5 eV/atom/ps) — so a "Lost atoms" result
+  is an integration failure to retry smaller, not a verdict on the fit.
+- Documented a property of every FitSNAP-generated ACE potential found while validating this stage:
+  `rcinner` zeroes **all** radial basis functions below the inner cutoff
+  (`ace_radial.cpp: gr.fill(0)`), and FitSNAP always writes `prehc: 0`, so there is nothing
+  underneath — measured on a real potential, W–W energy is a flat −4.53 eV with **exactly zero
+  force** below 0.99 Å behind a ~680 eV wall, i.e. an atom trap. A controlled A/B (same 300
+  configurations, same labels, only `rcinner` differing) shows `rcinner = 0` both removes the trap
+  (a genuine 2234 eV repulsive wall at 0.80 Å) and slightly *improves* errors (1.174 vs 1.366
+  eV/atom), with FitSNAP's own default being 0. An earlier CHANGELOG entry claiming `rcinner = 0`
+  cost ~20× the energy RMSE was wrong — that comparison was between two different pipeline runs with
+  different random structures and never isolated the parameter.
 - Drift is measured on an NVE tail rather than across the NVT leg (where the thermostat, not the
   potential, sets the total energy); collapse is detected with a neighbour list; an unstable
   potential is reported as a result (`md_ok = 0` with a reason), never raised.

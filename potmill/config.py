@@ -80,7 +80,10 @@ class ConfigManager:
             "relax_box": 0,
             "ensemble": "nvt",
             "temperature": 300.0,
-            "timestep": 0.001,
+            # 0.5 fs, not the more usual 1 fs: these screens run stiff, immature potentials on
+            # hydrogen-containing systems, where 1 fs loses atoms outright (LAMMPS "Lost atoms")
+            # while 0.2 fs on the same potential integrates cleanly (drift 1e-5 eV/atom/ps).
+            "timestep": 0.0005,
             "steps": 10000,
             "max_potentials": 32,
             "md_cores_per_job": 1,

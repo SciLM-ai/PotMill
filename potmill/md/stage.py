@@ -33,6 +33,7 @@ MD_COLUMNS = (
     "md_T_final",
     "md_min_dist",
     "md_compression",
+    "md_closest_pair",
     "md_natoms",
     "md_note",
 )
@@ -159,6 +160,7 @@ def md_task(start_path, position, structure_path, *dependencies, overrides=None)
             "md_T_final": result["T_final"],
             "md_min_dist": result["min_dist"],
             "md_compression": result.get("compression"),
+            "md_closest_pair": result.get("closest_pair"),
             "md_natoms": result["natoms"],
             "md_note": result["note"],
         }

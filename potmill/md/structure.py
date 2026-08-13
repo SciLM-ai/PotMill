@@ -43,6 +43,28 @@ def min_interatomic_distance(atoms, cutoff=3.0):
     return float(distances.min()) if len(distances) else None
 
 
+def closest_contact(atoms, cutoff=3.5):
+    """``(ratio, "H-W", distance)`` for the most compressed pair -- what actually collapsed.
+
+    Knowing the ELEMENTS matters when reading a failure: a hydrogen pair at 0.9 A is ordinary, a
+    tungsten pair at 1.5 A is a collapse, and "min distance 0.354 A" alone tells you neither which
+    interaction the fit got wrong nor where to add training data.
+    """
+    from ase.data import chemical_symbols, covalent_radii
+    from ase.neighborlist import neighbor_list
+
+    if len(atoms) < 2:
+        return None
+    numbers = atoms.get_atomic_numbers()
+    i, j, d = neighbor_list("ijd", atoms, cutoff)
+    if not len(d):
+        return None
+    ratios = d / (covalent_radii[numbers[i]] + covalent_radii[numbers[j]])
+    k = int(ratios.argmin())
+    pair = "-".join(sorted((chemical_symbols[numbers[i[k]]], chemical_symbols[numbers[j[k]]])))
+    return float(ratios[k]), pair, float(d[k])
+
+
 def compression(atoms, cutoff=3.5):
     """How compressed the tightest contact is, as ``d / (r_i + r_j)`` with covalent radii.
 
@@ -55,18 +77,8 @@ def compression(atoms, cutoff=3.5):
     RANKING of candidates matters here, ase is a hard dependency everywhere this runs (mendeleev is
     not -- it is absent from the CI test environment), and ase.data needs no database read.
     """
-    import numpy as np
-    from ase.data import covalent_radii
-    from ase.neighborlist import neighbor_list
-
-    if len(atoms) < 2:
-        return None
-    numbers = atoms.get_atomic_numbers()
-    i, j, d = neighbor_list("ijd", atoms, cutoff)
-    if not len(d):
-        return None
-    pair_radii = covalent_radii[numbers[i]] + covalent_radii[numbers[j]]
-    return float(np.min(d / pair_radii))
+    contact = closest_contact(atoms, cutoff)
+    return contact[0] if contact else None
 
 
 def structures_by_job_ids(run_dir, wanted):

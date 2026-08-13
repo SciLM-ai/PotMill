@@ -64,17 +64,17 @@ def _geometry_now(lmp, natoms):
     return positions, cell
 
 
-def _compression_now(lmp, atoms):
-    """Compression of the live configuration (see ``md.structure.compression``)."""
+def _contact_now(lmp, atoms):
+    """Most compressed contact of the live configuration: ``(ratio, "H-W", distance)``."""
     from ase import Atoms
 
-    from potmill.md.structure import compression
+    from potmill.md.structure import closest_contact
 
     natoms = lmp.get_natoms()
     if natoms != len(atoms):
         return None
     positions, cell = _geometry_now(lmp, natoms)
-    return compression(
+    return closest_contact(
         Atoms(positions=positions, cell=cell, pbc=True, numbers=atoms.get_atomic_numbers())
     )
 
@@ -157,7 +157,8 @@ def run_md(
                 # Whether the cell survives RELAXATION separates two very different diagnoses: a
                 # potential whose own 0 K minimum is a collapsed structure is broken outright, while
                 # one that only fails once it is heated is merely unstable in dynamics.
-                record["compression_after_minimize"] = _compression_now(lmp, atoms)
+                after_min = _contact_now(lmp, atoms)
+                record["compression_after_minimize"] = after_min[0] if after_min else None
 
             lmp.commands_list(
                 [
@@ -198,7 +199,9 @@ def run_md(
             natoms = lmp.get_natoms()
             positions, cell = _geometry_now(lmp, natoms)
             record["min_dist"] = _min_distance(positions, cell)
-            record["compression"] = _compression_now(lmp, atoms)
+            contact = _contact_now(lmp, atoms)
+            record["compression"] = contact[0] if contact else None
+            record["closest_pair"] = contact[1] if contact else None
             record["drift_steps"] = drift_steps
             record["drift_per_atom_per_ps"] = (
                 (e_drift_end - e_drift_start) / natoms / (drift_steps * timestep)
@@ -217,8 +220,8 @@ def run_md(
                 record["note"] = "non-finite energy or temperature during MD"
             elif collapsed:
                 record["note"] = (
-                    f"atoms collapsed: closest pair {record['min_dist']:.3f} A = "
-                    f"{record['compression']:.2f}x its covalent bond length"
+                    f"atoms collapsed: {contact[1]} pair at {contact[2]:.3f} A = "
+                    f"{contact[0]:.2f}x its covalent bond length"
                 )
             elif natoms != len(atoms):
                 record["note"] = f"lost atoms: {natoms} of {len(atoms)} remain"
