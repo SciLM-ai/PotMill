@@ -277,6 +277,21 @@ writer, constant per install) but "is this FIT usable for dynamics?" -- a proper
 coverage and hyperparameters, which is why it runs per potential and belongs next to the Pareto
 table. Results land in `potentials/md.csv` (authoritative) and are joined into `index.csv`.
 
+**Known property of every FitSNAP-generated ACE potential: there is no repulsive core.** The `.yace`
+carries `prehc: 0` (AcePot never writes a hard-core term) and `rcut_in` switches the ACE contribution
+off below `rcinner`. Measured on a real exported potential (W-W, `rcinner = 1.0`, `drcinner = 0.01`):
+`+62.4 eV` at 1.00 A with a repulsive force of 195 eV/A, then a **74 eV step down over 0.01 A** to a
+perfectly flat `-11.96 eV` plateau with EXACTLY ZERO force -- and that trapped state is far below the
+real bonded minimum (`-2.5 eV` at 2.4 A). Any pair that crosses falls in, cannot come out, and
+releases 74 eV of heat that pushes further pairs over. Two things follow: (a) collapse verdicts
+cluster just inside `rcinner`, which is the signature to look for; (b) a post-hoc ZBL overlay does
+NOT rescue such a potential (tested: it restores a 3275 eV wall at 0.6 A and leaves r >= 2 A
+untouched, yet MD still collapsed) because the trap sits underneath it. Setting `rcinner = 0` removes
+the cliff but is not a fix either -- tested end to end, it made the energy RMSE ~20x worse (20.1 vs
+1.02) and the toy potentials still collapsed. Well-trained potentials simply never reach that region,
+which is why they are stable; if short-range robustness is ever needed, the fix belongs in the FIT
+(a ZBL reference in `FitSNAP.in [REFERENCE]`, which the .mod writer already supports), not the export.
+
 - **The test structure is the whole problem.** Every configuration the pipeline generates is entropy
   MAXIMIZED -- deliberately strange and 2-25 atoms. MD from a raw one runs away regardless of fit
   quality (measured: 300 K start -> 5200 K) and says nothing. The auto path takes the run's lowest
@@ -297,14 +312,25 @@ table. Results land in `potentials/md.csv` (authoritative) and are joined into `
   same mendeleev table `structuregen` samples) so that compositions compare fairly. Everything about
   that choice goes to `md/structure.txt`. If nothing is evaluable the stage RAISES and asks for a
   structure -- it never tests on a cell MD cannot start from.
-- **The collapse floor is the potential's own inner cutoff**, not a fixed number: a run "passed"
-  with its closest pair at 0.877 A and a drift 100x worse than its stable siblings, because the
-  first floor (0.5 A) was too lenient. Below `rcinner` the potential is not evaluating anything
-  meaningful, so a trajectory that gets there has collapsed however finite its energy looks.
-- **`relax_box` defaults to 0.** Relaxing the cell during minimization is more physical (entropy
-  volumes are random) but strictly harsher: an immature potential shrinks the cell until atoms fuse,
-  so the relaxation itself becomes the failure. Measured: 4/4 failed with box relaxation where 4/4
-  passed without it. It stays available for mature potentials.
+- **Collapse is a RATIO, never an absolute distance.** `md_compression` is the closest pair's
+  distance over the sum of its covalent radii (`ase.data`), and below `COLLAPSE_COMPRESSION = 0.7`
+  the run is collapsed. Both cheaper criteria produced false verdicts on real runs: a fixed 0.5 A
+  floor passed a run whose closest pair was 0.877 A with a drift 100x its stable siblings, and a
+  floor derived from `rcinner` was worse in both directions -- it became 0.1 A when `rcinner = 0`
+  (passing a run that ended at 0.58 A) and it condemned a perfectly ordinary H-H contact at 0.9 A,
+  since H2 is 0.74 A. Any absolute number is wrong for a multi-element system: 1.8 A is a squeezed
+  W-W contact and a normal H-W one.
+- **`compression_after_minimize` separates two diagnoses**: a potential whose own 0 K minimum is a
+  collapsed cell is broken outright; one that only fails once heated is unstable in dynamics.
+- **`relax_box` defaults to 0** because that is the plain reading of "minimize the structure", not
+  because it is broken: on well-trained potentials it is measured to work (6/6 stable, compression
+  unchanged at 0.76-0.83). On under-trained ones it collapses the cell -- correctly, since for those
+  the collapsed state really is the energy minimum.
+- **What a real verdict looks like.** 5000-config HBeW potentials: 3/3 stable, compression 0.76-0.81
+  after minimization and unchanged after 2000 steps. 40-config toy runs: LAMMPS aborts or atoms at
+  0.30-0.39x bond length. The stage is separating good fits from bad ones, which is its whole job --
+  do NOT read a failure as a bug in the stage without first checking `md_compression` and the
+  training-set size.
 - **Drift is measured on an NVE tail, never under the thermostat.** Under `nvt` the total energy is
   the thermostat's to change, so drift across the NVT leg measures nothing; the runner switches to
   NVE for `steps/10` at the end and measures there.

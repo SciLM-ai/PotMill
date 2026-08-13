@@ -17,10 +17,23 @@
   Compression is measured as `d/(r_i + r_j)` with Pyykkö covalent radii so compositions compare
   fairly, and the full choice is written to `md/structure.txt`. A user-supplied `structure` is used
   exactly as given.
-- The collapse check uses the potential's own inner cutoff rather than a fixed distance (a run
-  "passed" with atoms at 0.877 Å under the first 0.5 Å floor), and `relax_box` defaults to 0 —
-  relaxing the cell is more physical but strictly harsher, since an immature potential collapses it
-  (measured: 4/4 failed with box relaxation, 4/4 passed without).
+- Collapse is judged as `md_compression` — the closest pair over the sum of its covalent radii —
+  below 0.7, never as an absolute distance: no single distance works across elements (1.8 Å is a
+  squeezed W–W contact and a normal H–W one), and both cheaper criteria gave false verdicts on real
+  runs (a 0.5 Å floor passed a run whose closest pair was 0.877 Å; an `rcinner`-derived floor became
+  0.1 Å when `rcinner = 0` and separately condemned an ordinary 0.9 Å H–H contact). The stage also
+  reports `compression_after_minimize`, which distinguishes a potential whose 0 K minimum is already
+  collapsed from one that only fails when heated.
+- With that criterion the verdicts are physical: the 5000-configuration HBeW potentials are stable
+  (3/3, compression 0.76–0.81 unchanged through 2000 steps, and 6/6 including with `relax_box = 1`),
+  while 40-configuration toy runs collapse. `relax_box` defaults to 0 — it is measured to work on
+  well-trained potentials, so the default is simply the plain reading of "minimize the structure".
+- Documented a property of every FitSNAP-generated ACE potential found while validating this: the
+  `.yace` has no core repulsion (`prehc: 0`) and `rcinner` switches ACE off below the inner cutoff,
+  producing a 74 eV step over 0.01 Å into a force-free well *below* the bonded minimum. Collapse
+  verdicts clustering just inside `rcinner` are that trap; a post-hoc ZBL overlay does not rescue it,
+  and `rcinner = 0` costs ~20x energy RMSE without fixing it — the remedy, if ever needed, is a ZBL
+  reference in the fit itself.
 - Drift is measured on an NVE tail rather than across the NVT leg (where the thermostat, not the
   potential, sets the total energy); collapse is detected with a neighbour list; an unstable
   potential is reported as a result (`md_ok = 0` with a reason), never raised.

@@ -215,8 +215,14 @@ outcome in `potentials/md.csv` (also joined into `index.csv`):
 | `md_ok` | survived: no crash, no lost atoms, nothing non-finite, no collapsed pairs |
 | `md_drift_per_atom_per_ps` | NVE total-energy drift — small means forces really are the gradient of the energy |
 | `md_T_final` | final temperature (under `nvt`, a fit that can't hold the thermostat is a red flag) |
-| `md_min_dist` | closest approach in Å; below 0.5 Å the structure collapsed |
+| `md_min_dist` | closest approach in Å |
+| `md_compression` | closest pair as a fraction of its covalent bond length; below 0.7 = collapsed |
 | `md_note` | why it failed, when it did |
+
+Collapse is judged as a *fraction* rather than a distance because no single distance works across
+elements — 1.8 Å is a squeezed W–W contact and a perfectly normal H–W one, and an H–H pair at 0.9 Å
+is fine (H₂ is 0.74 Å). A run that fails only after heating is unstable in dynamics; one that already
+fails at `md_compression` after minimization has a collapsed structure as its own 0 K minimum.
 
 By default the test structure comes from the run itself: the **least compressed** of the 20 lowest
 **formation energy per atom** configurations (composition removed by a per-element reference fit),

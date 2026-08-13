@@ -11,7 +11,7 @@ import unittest
 
 import numpy as np
 
-from potmill.md.runner import FUSED_DISTANCE, _min_distance
+from potmill.md.runner import COLLAPSE_COMPRESSION, FUSED_DISTANCE, _min_distance
 from potmill.md.stage import merge_md_task
 from potmill.md.structure import replicate_for_md
 
@@ -97,6 +97,33 @@ class TestCandidateSelection(unittest.TestCase):
         structures = {0: self._cell(0.5), 1: self._cell(0.9)}
         with self.assertRaises(ValueError):
             select_evaluable([0, 1], structures, {0: 0.0, 1: 0.4}, min_distance=1.1)
+
+
+@unittest.skipUnless(_HAVE_ASE, "ase not installed")
+class TestCollapseCriterion(unittest.TestCase):
+    """Collapse must be judged as a FRACTION of the pair's covalent bond length, never as an
+    absolute distance. Two real false verdicts came from getting this wrong: an absolute 1.1 A floor
+    called a perfectly normal H-H contact (H2 is 0.74 A) a collapse, and a floor derived from
+    ``rcinner`` became 0.1 A when rcinner was 0, passing a run whose atoms ended up 0.58 A apart.
+    """
+
+    def test_short_hydrogen_contact_is_not_a_collapse(self):
+        from ase import Atoms
+
+        from potmill.md.structure import compression
+
+        h2 = Atoms("H2", positions=[[0, 0, 0], [0.9, 0, 0]], cell=np.eye(3) * 12.0, pbc=True)
+        self.assertLess(0.9, 1.1, "this contact is shorter than the old absolute floor")
+        self.assertGreater(compression(h2), COLLAPSE_COMPRESSION)
+
+    def test_squeezed_heavy_contact_is_a_collapse(self):
+        from ase import Atoms
+
+        from potmill.md.structure import compression
+
+        w2 = Atoms("W2", positions=[[0, 0, 0], [1.5, 0, 0]], cell=np.eye(3) * 12.0, pbc=True)
+        self.assertGreater(1.5, 1.1, "this contact would have PASSED the old absolute floor")
+        self.assertLess(compression(w2), COLLAPSE_COMPRESSION)
 
 
 @unittest.skipUnless(_HAVE_ASE, "ase not installed")

@@ -23,12 +23,14 @@ import math
 import os
 import tempfile
 
-# Fallback collapse floor. The stage passes the potential's OWN floor instead (max rcinner + margin,
-# the same threshold the structure picker uses): below ACE's inner cutoff the potential is no longer
-# evaluating anything meaningful, so a trajectory that gets there has collapsed however finite its
-# energy looks. A real run made this concrete -- a potential "survived" with its closest pair at
-# 0.877 A and a drift two orders of magnitude worse than its stable siblings.
-FUSED_DISTANCE = 0.5  # A
+# Collapse is judged on COMPRESSION -- the closest pair's distance divided by the sum of its
+# covalent radii -- not on an absolute distance, and never on the potential's inner cutoff.
+# Tying it to rcinner was a bug that produced a false verdict: with rcinner = 0 the threshold became
+# 0.1 A, so a run whose atoms ended up 0.58-0.71 A apart (with a drift 1000x worse than a healthy
+# one) was reported STABLE. A ratio is also the only criterion that works across elements: 1.8 A is
+# a squeezed W-W contact and a perfectly normal H-W one.
+COLLAPSE_COMPRESSION = 0.7  # closest pair below 70% of its covalent bond length = collapsed
+FUSED_DISTANCE = 0.5  # A -- absolute backstop for fully fused atoms
 PAIR_SEARCH_CUTOFF = 3.0  # A -- far enough to catch the real nearest neighbour in a solid
 
 
@@ -48,6 +50,35 @@ def _min_distance(positions, cell, pbc=True):
     return float(distances.min()) if len(distances) else None
 
 
+def _geometry_now(lmp, natoms):
+    """Current positions + cell out of a live LAMMPS instance."""
+    import numpy as np
+
+    positions = np.array(lmp.gather_atoms("x", 1, 3)).reshape(natoms, 3)
+    boxlo, boxhi, xy, yz, xz, *_ = lmp.extract_box()
+    cell = [
+        [boxhi[0] - boxlo[0], 0.0, 0.0],
+        [xy, boxhi[1] - boxlo[1], 0.0],
+        [xz, yz, boxhi[2] - boxlo[2]],
+    ]
+    return positions, cell
+
+
+def _compression_now(lmp, atoms):
+    """Compression of the live configuration (see ``md.structure.compression``)."""
+    from ase import Atoms
+
+    from potmill.md.structure import compression
+
+    natoms = lmp.get_natoms()
+    if natoms != len(atoms):
+        return None
+    positions, cell = _geometry_now(lmp, natoms)
+    return compression(
+        Atoms(positions=positions, cell=cell, pbc=True, numbers=atoms.get_atomic_numbers())
+    )
+
+
 def run_md(
     atoms,
     pot_dir,
@@ -59,7 +90,7 @@ def run_md(
     steps=10000,
     minimize=True,
     relax_box=True,
-    fused_distance=FUSED_DISTANCE,
+    collapse_compression=COLLAPSE_COMPRESSION,
     units="metal",
     atom_style="atomic",
     seed=12345,
@@ -70,7 +101,6 @@ def run_md(
     Never raises on a LAMMPS failure: an exploding potential is a RESULT here, not an error, so it
     comes back as ``ok = 0`` with the reason in ``note``.
     """
-    import numpy as np
     from ase.io import write
     from lammps import lammps
 
@@ -112,7 +142,7 @@ def run_md(
             record["e_pot_start"] = float(lmp.get_thermo("pe"))
 
             if minimize:
-                # Relax the CELL too by default: entropy generation assigns each configuration a
+                # Relax the CELL too if asked: entropy generation assigns each configuration a
                 # random volume (volume_scaling_min..max), so testing at the volume it happens to
                 # have would measure the structure's arbitrary compression, not the potential.
                 # Letting the potential find its own equilibrium volume is the fair test.
@@ -124,6 +154,10 @@ def run_md(
                 e_min = float(lmp.get_thermo("pe"))
                 record["minimized_ok"] = int(math.isfinite(e_min))
                 record["e_pot_min"] = e_min
+                # Whether the cell survives RELAXATION separates two very different diagnoses: a
+                # potential whose own 0 K minimum is a collapsed structure is broken outright, while
+                # one that only fails once it is heated is merely unstable in dynamics.
+                record["compression_after_minimize"] = _compression_now(lmp, atoms)
 
             lmp.commands_list(
                 [
@@ -162,14 +196,9 @@ def run_md(
                 e_drift_end = float(lmp.get_thermo("etotal"))
 
             natoms = lmp.get_natoms()
-            positions = np.array(lmp.gather_atoms("x", 1, 3)).reshape(natoms, 3)
-            boxlo, boxhi, xy, yz, xz, *_ = lmp.extract_box()
-            cell = [
-                [boxhi[0] - boxlo[0], 0.0, 0.0],
-                [xy, boxhi[1] - boxlo[1], 0.0],
-                [xz, yz, boxhi[2] - boxlo[2]],
-            ]
+            positions, cell = _geometry_now(lmp, natoms)
             record["min_dist"] = _min_distance(positions, cell)
+            record["compression"] = _compression_now(lmp, atoms)
             record["drift_steps"] = drift_steps
             record["drift_per_atom_per_ps"] = (
                 (e_drift_end - e_drift_start) / natoms / (drift_steps * timestep)
@@ -178,12 +207,19 @@ def run_md(
             finite = all(
                 math.isfinite(v) for v in (e_drift_end, t_end, record["drift_per_atom_per_ps"])
             )
-            fused = record["min_dist"] is not None and record["min_dist"] < fused_distance
-            record["ok"] = int(finite and not fused and natoms == len(atoms))
+            squeezed = record["compression"] is not None and (
+                record["compression"] < collapse_compression
+            )
+            fused = record["min_dist"] is not None and record["min_dist"] < FUSED_DISTANCE
+            collapsed = squeezed or fused
+            record["ok"] = int(finite and not collapsed and natoms == len(atoms))
             if not finite:
                 record["note"] = "non-finite energy or temperature during MD"
-            elif fused:
-                record["note"] = f"atoms collapsed: min distance {record['min_dist']:.3f} A"
+            elif collapsed:
+                record["note"] = (
+                    f"atoms collapsed: closest pair {record['min_dist']:.3f} A = "
+                    f"{record['compression']:.2f}x its covalent bond length"
+                )
             elif natoms != len(atoms):
                 record["note"] = f"lost atoms: {natoms} of {len(atoms)} remain"
     except Exception as exc:  # noqa: BLE001 -- an unstable potential is a result, not a crash
