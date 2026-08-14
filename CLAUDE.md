@@ -20,8 +20,9 @@ PotMill is an HPC pipeline that iteratively generates training data for machine 
 3. **Featurization** - computes ACE or SNAP descriptors via FitSNAP
 4. **Fitting** - least-squares fitting of MLIP coefficients across hyperparameter grid
 5. **Pareto front** - identifies optimal hyperparameters balancing accuracy vs computational cost
-6. **Uncertainty quantification** - POPSRegression for prediction intervals
-7. **LAMMPS potential export** - writes the selected fits as ready-to-run LAMMPS potentials
+6. **LAMMPS potential export** - writes the selected fits as ready-to-run LAMMPS potentials
+7. **MD screening** - a short trajectory per exported potential
+8. **Uncertainty quantification** - a streaming POPS error bar shipped with each potential, usable from ASE
 
 ## Architecture
 
@@ -107,6 +108,11 @@ potmill/
     structure.py       # test structure: lowest formation energy per atom, replicated (or user file)
     runner.py          # minimize + MD via LAMMPS; drift / temperature / collapse metrics
     stage.py           # prepare -> N parallel md tasks -> merge into potentials/md.csv + index.csv
+  uq/                  # POPS uncertainty shipped with each exported potential ([Main] uq)
+    pops.py            # streaming POPS estimator (O(p^2) memory) + evidence ridge from a Gram
+    artifact.py        # the <name>.uq.npz written beside the .yace + split-conformal calibration
+    stage.py           # N parallel uq tasks -> potentials/uq.csv + index.csv
+    calculator.py      # PotMillCalculator: ASE calculator with get_uncertainty()/get_bounds()
 ```
 
 Tests live in `tests/` (stdlib `unittest`); run them with `python -m unittest discover -s tests`.
@@ -157,7 +163,7 @@ The pipeline is configured via a `config.ini` in the working directory, parsed b
 `potmill.config.ConfigManager`. "Our" sections have documented defaults in
 `ConfigManager.DEFAULTS` and warn on unknown keys; passthrough sections forward kwargs verbatim
 to external calculators. Key sections:
-- `[Main]`: pipeline stage toggles (`entropy`/`labeling`/`featurize`/`fit`/`pareto`/`pops`), `nconfigurations`, `batch_size`, and `device` = `cuda` | `cpu` (drives labeling + fitting placement)
+- `[Main]`: pipeline stage toggles (`entropy`/`labeling`/`featurize`/`fit`/`pareto`/`potential`/`md`/`uq`, plus the legacy `pops`), `nconfigurations`, `batch_size`, and `device` = `cuda` | `cpu` (drives labeling + fitting placement)
 - `[FitSNAP]`: MLIP type (ACE/SNAP), element specification, FitSNAP.in filename
 - `[ourStructureGen]`: structure generation method and parameters (defaults resolved in `structuregen`), plus `entropy_jobs_per_node`, `entropy_cores_per_job`
 - `[ourLabeling]`: `calculator` = `FAIRChemCalculator` | `Vasp` | `LAMMPS`, plus `label_batch_size`, `labeling_jobs_per_node`, `labeling_cores_per_job`
@@ -166,6 +172,7 @@ to external calculators. Key sections:
 - Per-stage layout is uniform: each stage has `<stage>_jobs_per_node` concurrent jobs of `<stage>_cores_per_job` cores. In `cuda` mode each labeling/fit job takes one GPU; in `cpu` mode each takes its cores and `worker_layout` checks the per-node sum leaves cores free for the dynamic executor.
 - `[ourPotential]`: `which` = `none` | `knee` | `pareto` (default) | `all` (its only key -- the written `.mod` chooses its pace evaluator at runtime, see below)
 - `[ourMD]`: MD screening of the written potentials -- `structure` (`auto` | path), `min_atoms`, `minimize`, `ensemble`, `temperature`, `timestep`, `steps`, `max_potentials`, `md_cores_per_job`
+- `[ourUQ]`: POPS uncertainty per written potential -- `posterior` (`hypercube` | `ensemble`), `minimum_relative_error`, `percentile_clipping`, `max_potentials`, `uq_cores_per_job`
 - `[ourHyperparameters]`: the swept grid (`min/max_rcut`, `num_rcut`, `min/max_nmax`, `min/max_lmax`, `min/max_twojmax`, `middle_eweight`, `num_eweights`)
 - `[FAIRChemCalculator]`, `[Vasp]`, `[LAMMPS]`: passthrough kwargs for the chosen labeling backend
 
@@ -388,6 +395,125 @@ well-trained potentials are stable either way.
   is a future's result and must not size the submission; task `i` claims row `i` of `index.csv` and
   returns immediately if there is no row `i`. The merge task WARNS when more potentials were
   exported than tested, so a truncated screen cannot look complete.
+
+## Uncertainty quantification (`potmill/uq/`, `[Main] uq`)
+
+Every exported potential gets a `<name>.uq.npz` beside its `.yace`, plus a row in
+`potentials/uq.csv` (joined into `index.csv`). Users reach it through an ASE calculator --
+`PotMillCalculator(pot_dir).get_uncertainty(atoms)` alongside `get_forces()` -- or the CLI
+(`python -m potmill.uq <run_dir> [--predict frames.xyz]`). The method is POPS (Swinburne et al.,
+npj Comput Mater 2025): the spread of the per-configuration parameter corrections that would make
+the model reproduce each training point exactly. It is the right family here because our error is
+dominated by MISSPECIFICATION -- a linear ACE basis cannot represent the reference surface -- not by
+label noise.
+
+- **The estimator is reimplemented (`uq/pops.py`), not delegated to `popsregression`, for two
+  reasons.** SCALE: the library materializes an `n x p` matrix of pointwise corrections and reloads
+  the cumulative design matrix -- at 100k configurations and p = 1254 that is neither storable nor
+  the O(N) pattern the incremental fit exists to preserve. Every POPS quantity is an accumulation of
+  rank-1 terms, so it streams in O(p^2): `C = Sigma_s [sum_i w_i x_i x_i^T] Sigma_s`, another
+  weighted Gram. ANCHORING: the library refits BayesianRidge internally, so its error bars describe
+  ITS coefficients, not the ones we ship. Given the same anchor the two agree to 1e-10
+  (`tests/test_uq.py::TestAgainstTheLibrary`, run whenever `popsregression` is installed).
+- **The Bayesian half is free.** Evidence maximization needs only the eigenvalues of `X^T X`, plus
+  `X^T y` and `y^T y` -- exactly what the fit's augmented R-factor already carries -- so it costs one
+  p x p eigendecomposition and no data pass. It must iterate on `rho = lambda / alpha` rather than on
+  the two hyperparameters separately: real ACE Gram matrices reach condition ~1e18, where forming
+  `alpha * eigvals` OVERFLOWS float64 (observed on a real 100k fit). Regression-tested.
+- **Energy rows only.** Adding the force rows costs 42x the data and makes per-structure ranking
+  WORSE (Spearman 0.395 -> 0.375 against held-out error): force residuals live on a much larger
+  numerical scale and take over the correction cloud, while the question asked is about a structure's
+  ENERGY.
+- **Rows carry the FIT's weights** (`w = exp(-E/5)` normalized to `eweight`, as in `fitting/fit.py`).
+  POPS assumes its anchor minimizes the loss whose Hessian gives `Sigma_s`, and our beta minimizes
+  the weighted loss; removing that mismatch raised ranking 0.395 -> 0.431 for free. Note the weight
+  CANCELS out of the pointwise correction itself (`theta_i = r_i Sigma_s x_i / (x_i^T Sigma_s x_i)`
+  is invariant to scaling row i), so what the weights change is the metric `Sigma_s` and which rows
+  clear the residual threshold -- and sigma stays in eV/atom, directly comparable to the held-out
+  errors.
+- **The shipped object is the hypercube itself, not an ensemble sampled from it.** Sampling made the
+  bracket's coverage partly a statement about the sample count (91.1% at 100 samples, 95.4% at 500,
+  98.2% at 10 000), whereas maximizing a LINEAR functional over a box is analytic -- pick each
+  component's favourable corner -- and is the honest worst case over the set. The standard deviation
+  likewise comes from the box's exact second moment (`diag((high-low)^2/12) + m m^T`): measured
+  0.61197 analytic vs 0.61312 from 500 samples, i.e. sampling bought no accuracy, only a
+  seed-dependent answer. `POPSPosterior.sample(n)` still materializes a committee on demand, which is
+  the paper's own use, so nothing is lost by not storing one. The box is NOT the cheaper option --
+  measured at p = 1236, k = 1162: `projections` is 5.75 MB against 2.47 MB for a 500-member ensemble.
+  That is the price of exactness, and it sits beside a `sigma_epi` of the same order (6.11 MB), so
+  the artifact is ~11 MB either way.
+- **`sigma(x)` uses an eigen-factor `F F^T = Sigma_total`, not the explicit quadratic form**: 140 s
+  -> 0.5 s for 100k structures at p = 759, which is the difference between screening a trajectory and
+  not. Eigen, not Cholesky -- `Sigma_miss` is only positive SEMI-definite.
+- **Spearman ~0.43 against held-out error is NOT a bug, and it is near the attainable ceiling. Do not
+  "fix" it.** Measured on the 100k GRACE run, same data throughout: two INDEPENDENT fits of the same
+  training set agree with each other about which structures are hard only at rho = 0.741 -- that is
+  the ceiling for any method here, since it is how much of "difficulty" is a property of the
+  structure rather than of the particular fit. POPS reaches 0.428-0.431, i.e. ~58% of it. The
+  alternatives measured on the same data are all worse: `popsregression` itself scores 0.275 (it
+  anchors on its own refit), leverage/`gamma` alone 0.145, a 2-model committee 0.189. The error bar
+  is a RANKING tool -- which structures to label next, which predictions to distrust -- not a
+  per-structure error prediction.
+- **`percentile_clipping` defaults to 0.0 (the library default) because clipping trades away exactly
+  what the uncertainty is for.** Same potential, same 100k configurations, only the clipping percentile
+  differing (mean held-out |error| 0.0622 eV/atom):
+
+  | clip % | sigma (eV/atom) | q68 | Spearman | bracket half-width | bracket coverage | fit time |
+  |---|---|---|---|---|---|---|
+  | 0.0 | 0.0488 | 1.40 | **0.428** | 1.806 | 100.0% | 7.9 s |
+  | 0.5 | 0.0160 | 4.29 | 0.280 | 0.438 | 100.0% | 15.0 s |
+  | 1.0 | 0.0144 | 4.84 | 0.222 | 0.336 | 100.0% | 14.0 s |
+  | 5.0 | 0.0124 | 5.82 | 0.102 | 0.150 | 95.1% | 13.6 s |
+
+  Clipping does buy a far tighter bracket that still covered every held-out residual on this run, so
+  it is a reasonable choice for someone who wants a usable band rather than a worst case -- but it
+  degrades the ranking monotonically, and ranking is the primary product. It also costs ~2x the fit
+  time, since a quantile box needs the projected corrections materialized while min/max is a running
+  extremum.
+- **Calibration is split-conformal against genuinely HELD-OUT predictions**: every configuration is
+  predicted by the k-fold model that did not train on it (the same fixed `config_fold` partition the
+  fit uses), and `calib_q68`/`calib_q95` are quantiles of `|error| / sigma` over those. Measured q68
+  1.09-1.46 across the 32-potential GRACE front (1.40-1.82 on an earlier run), i.e. the raw POPS
+  spread is 10-45% too small and covers only 51-64% of held-out errors before calibration -- which is
+  why `get_uncertainty()` returns the CALIBRATED number by default (`level=None` gives the raw
+  spread). It accepts one mild mismatch knowingly: the errors come from the FOLD models while sigma
+  describes the ALL-DATA model that ships, which makes the factor slightly conservative. That is the
+  right direction and the only honest option -- the shipped model has seen every configuration, so
+  its own residuals cannot measure how it does on unseen ones.
+- **The artifact is float32 and ~11 MB at p = 1236** (`sigma_epi` is p x p = 6.11 MB, `projections`
+  p x k = 5.74 MB). `beta` is stored in float64 -- it must match the `.yace` exactly. The file also
+  carries the run's `FitSNAP.in` verbatim, so a potential directory copied to another machine still
+  knows how to featurize a new structure. `sigma_epi` is KEPT even though it is over half the file:
+  the parameter term carries 1.7-15.9% of the VARIANCE across the measured fronts, i.e. dropping it
+  would shrink sigma by 0.9-8.3% -- small at 100k configurations but not a rounding error, and it is
+  the DOMINANT term at small training-set sizes, which the pipeline also runs at.
+- **The ASE calculator runs two engines and cross-checks them ONCE.** Energies/forces come from
+  LAMMPS with the exported `.mod` (0.27 s per structure, the same evaluator production MD uses),
+  while an uncertainty needs the descriptor ROW, i.e. a FitSNAP featurization (0.39 s per structure).
+  The first time both exist for the same structure it asserts `E_lammps == natoms * (x_E @ beta)` --
+  measured agreement 6.6e-11 eV/atom and 2.2e-10 eV/A -- because a `.uq.npz` and a `.yace` that are
+  not the same potential would otherwise attach an error bar to the wrong model, silently. It is a
+  screening calculator, not an MD engine: it builds a LAMMPS instance per call.
+- **Cost: 96 s per potential** at 100k configurations, p = 1236, 8 threads (dominated by reading ~1 GB
+  of energy rows and three O(n p^2) passes). That is minutes of CPU after everything else finishes,
+  so unlike the potential export the UQ stage DOES get a monitor Gantt row.
+- **The UQ merge takes the MD merge as a dependency.** Both do a read-modify-write of
+  `potentials/index.csv`, so running them concurrently would let one clobber the other's columns.
+  Only the one-line merge waits; the per-potential fits overlap the MD screen freely. `uq.csv` is
+  authoritative, and it UPDATES rather than replaces, so `--potential <name>` from the CLI does not
+  drop the other rows.
+- **Validated at full scale.** A 100k-configuration GRACE run (4 nodes, 1 h 47 m) exported 54 Pareto
+  potentials and the stage produced 32 of them (`max_potentials`), 32/32 written with no failures,
+  while the MD screen ran 32/32 stable on the same potentials. Spearman held at 0.419-0.433 across
+  the whole front (0.428 measured standalone on the previous run's potential), sigma 0.047-0.072
+  eV/atom against a held-out mean |error| of 0.062, and `uq_n_modes` tracked the basis size
+  (298-1168). Across the front, `uq_sigma_mean` correlates with `test_e_rmse` at 0.70, i.e. the error
+  bar also knows which POTENTIAL is better. Both merges wrote `index.csv` without clobbering each
+  other -- it carries the full `md_*` and `uq_*` column sets -- and both printed the truncation
+  WARNING, since the front (54) was larger than `max_potentials` (32).
+- **`[Main] pops` is the LEGACY diagnostic and is unrelated** -- it runs `popsregression` per
+  hyperparameter point, reloading the whole cumulative design matrix each time, and prints. It ships
+  nothing and does not scale; `[Main] uq` is the one that produces usable uncertainties.
 
 ## Dependencies
 

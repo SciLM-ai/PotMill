@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased — Uncertainty quantification
+
+- Added the `potmill.uq` stage (`[Main] uq`, `[ourUQ]`): every exported potential ships a
+  `<name>.uq.npz` beside its `.yace`, and `potentials/uq.csv` (joined into `index.csv`) records how
+  good that uncertainty is — `uq_sigma_mean`, the calibration factors `uq_q68`/`uq_q95`,
+  `uq_raw_coverage`, `uq_spearman` against held-out error, `uq_epistemic_share` and `uq_n_modes`.
+  Also runs standalone: `python -m potmill.uq <run_dir> [--predict frames.xyz]`.
+- Added `PotMillCalculator`, an ASE calculator over a potential directory:
+  `get_uncertainty(atoms, level=0.68|0.95|None)` in eV/atom, `get_bounds(atoms)` for the worst case
+  over the POPS set, and `get_ensemble(n)` for a committee — alongside the usual
+  `get_potential_energy()`/`get_forces()`, which come from LAMMPS running the exported `.mod`. The
+  first time both halves are evaluated it asserts `E_lammps == natoms * (x_E @ beta)` (measured
+  6.6e-11 eV/atom, 2.2e-10 eV/Å), so a `.uq.npz` and a `.yace` that are not the same potential can
+  never quietly produce an error bar for the wrong model. The artifact carries the run's `FitSNAP.in`,
+  so a potential directory copied elsewhere stays self-contained.
+- POPS is computed by a streaming reimplementation (`uq/pops.py`) rather than by calling
+  `popsregression`: the library materializes an `n x p` correction matrix and reloads the cumulative
+  design matrix, which at 100k configurations and p = 1254 is neither storable nor the O(N) pattern
+  the incremental fit exists to preserve, and it anchors on its own internal refit instead of on the
+  coefficients we ship. Streaming form is O(p²) and agrees with the library to 1e-10 given the same
+  anchor. The Bayesian half comes from the sufficient statistics alone (Gram, Xᵀy, yᵀy), iterating on
+  `rho = lambda/alpha` because `alpha * eigvals` overflows float64 at the condition numbers real ACE
+  design matrices reach (~1e18).
+- The shipped object is the POPS hypercube itself, not an ensemble sampled from it: the bracket is
+  then the exact corner extremum rather than a statement about the sample count (measured coverage
+  91.1% at 100 samples, 95.4% at 500, 98.2% at 10 000), and the standard deviation comes from the
+  box's exact second moment (0.61197 analytic vs 0.61312 from 500 samples). `sample(n)` still builds
+  an ensemble on demand.
+- Measured choices: energy rows only (adding force rows costs 42× the data and drops Spearman
+  0.395 → 0.375); rows weighted exactly as the fit weights them (0.395 → 0.431);
+  `percentile_clipping = 0.0` by default (0.5% already costs 0.428 → 0.280 ranking for a tighter
+  bracket). Spearman ~0.43 is near the ceiling — two independent fits of the same data agree with
+  each other at only 0.741 — and beats `popsregression` on the same data (0.275), leverage alone
+  (0.145) and a 2-model committee (0.189).
+- `[Main] uq` appears in `pipeline_monitor.csv` and in the monitor Gantt (96 s per potential at 100k
+  configurations, p = 1236). Its merge takes the MD merge as a dependency, since both do a
+  read-modify-write of `potentials/index.csv`.
+- **Validated by a full 100k-configuration GRACE pipeline run** (4 nodes, 1 h 47 m): 54 Pareto
+  potentials exported, 32 given uncertainty models (`max_potentials`), **32/32 written with no
+  failures** and 32/32 MD-stable. Spearman held at 0.419–0.433 across the whole front, σ
+  0.047–0.072 eV/atom against a held-out mean |error| of 0.062, q68 1.09–1.46, and `index.csv` came
+  out carrying both the `md_*` and `uq_*` column sets — the two merges no longer race. The UQ stage
+  occupied 4.8 min of wall clock (32 concurrent single-core tasks) against 7.8 min for the MD screen
+  it overlaps, both with the GPUs idle.
+- `[Main] pops` is now documented as the legacy per-combo diagnostic it always was (it reloads the
+  whole design matrix per hyperparameter point and ships nothing); it is unchanged and still
+  defaults to off.
+
 ## Unreleased — MD stability screening
 
 - `rcinner = 0.0` in all four example `FitSNAP.in` files (HBeW/ACE, HBeW/GRACE, WRe/ACE,

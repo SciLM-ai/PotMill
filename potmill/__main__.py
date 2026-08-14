@@ -33,6 +33,7 @@ from potmill.tools import (
     rcuts_to_string,
     twojmaxes_to_string,
 )
+from potmill.uq.stage import merge_uq_task, uq_task
 
 
 def main():
@@ -59,6 +60,7 @@ def main():
     pops_mode = config["Main"]["pops"]
     potential_mode = config["Main"]["potential"]
     md_mode = config["Main"]["md"]
+    uq_mode = config["Main"]["uq"]
     nconfigurations = config["Main"]["nconfigurations"]
     batch_size = config["Main"]["batch_size"]
     device = config["Main"]["device"]  # cuda | cpu -- drives labeling + fitting placement
@@ -133,6 +135,7 @@ def main():
     pops_futures = []
     potential_futures = []
     md_futures = []
+    uq_futures = []
 
     featurize_cores_per_job = res.featurize_cores_per_job
     print(
@@ -536,6 +539,7 @@ def main():
                                     flush=True,
                                 )
 
+                        md_merge_future = None
                         if md_mode and potential_futures:
                             # MD screening of the written potentials: one structure-prep task, a
                             # FIXED number of per-potential tasks (max_potentials -- the count cannot
@@ -581,6 +585,7 @@ def main():
                             )
                             fs.task_ = 0
                             md_futures.append(fs)
+                            md_merge_future = fs
                         elif md_mode:
                             print(
                                 "WARNING: [Main] md = 1 but the potential export is off "
@@ -589,7 +594,60 @@ def main():
                                 flush=True,
                             )
 
+                        if uq_mode and potential_futures and mlip == "ACE":
+                            # POPS uncertainty per exported potential -- same fixed-task-count rule
+                            # as the MD screen: task i claims row i of potentials/index.csv, so
+                            # nothing here depends on a future's RESULT.
+                            print("UQ jobs submission...", flush=True)
+                            uq_cfg = config["ourUQ"]
+                            uq_resource = {
+                                "cores": int(uq_cfg["uq_cores_per_job"]),
+                                "gpus_per_core": 0,
+                                "num_nodes": 1,
+                                "cwd": start_path + "potentials",
+                                "error_log_file": "error.out",
+                                "priority": 8,
+                            }
+                            uq_run_futures = []
+                            for position in range(int(uq_cfg["max_potentials"])):
+                                fs = exe.submit(
+                                    uq_task,
+                                    start_path,
+                                    position,
+                                    potential_futures[0],
+                                    resource_dict=uq_resource,
+                                )
+                                fs.task_ = position
+                                uq_run_futures.append(fs)
+                                uq_futures.append(fs)
+                            # The MD merge is a DEPENDENCY, not a data source: both merges do a
+                            # read-modify-write of potentials/index.csv, so they must not overlap.
+                            # Only this one-line merge waits; the per-potential UQ tasks above run
+                            # alongside the MD screen.
+                            fs = exe.submit(
+                                merge_uq_task,
+                                start_path,
+                                *uq_run_futures,
+                                *([md_merge_future] if md_merge_future is not None else []),
+                                resource_dict=uq_resource,
+                            )
+                            fs.task_ = 0
+                            uq_futures.append(fs)
+                        elif uq_mode:
+                            print(
+                                "WARNING: [Main] uq = 1 but "
+                                + (
+                                    f"[FitSNAP] mlip = {mlip} (the UQ stage supports ACE only)"
+                                    if mlip != "ACE"
+                                    else "the potential export is off ([Main] potential), so there "
+                                    "are no potentials to attach uncertainties to"
+                                )
+                                + "; NO UQ models will be written.",
+                                flush=True,
+                            )
+
                         num_md_tasks = len(md_futures)  # fixed total for the progress print
+                        num_uq_tasks = len(uq_futures)
                         b_futures = b_futures[1:]
                         num_b_futures = len(b_futures)
                         entropy_exe_shutdown = False
@@ -607,6 +665,7 @@ def main():
                                 pareto_futures,
                                 pops_futures,
                                 md_futures,
+                                uq_futures,
                             )
                         )
 
@@ -739,6 +798,9 @@ def main():
                             if md_futures:
                                 md_futures = check_and_print_status(md_futures, "MD", num_md_tasks)
 
+                            if uq_futures:
+                                uq_futures = check_and_print_status(uq_futures, "UQ", num_uq_tasks)
+
                             total_n_futures = (
                                 len(entropy_atoms_futures)
                                 + len(labeling_futures)
@@ -750,6 +812,7 @@ def main():
                                 + len(pops_futures)
                                 + len(potential_futures)
                                 + len(md_futures)
+                                + len(uq_futures)
                             )
 
                             monitor.update_task_counts(
@@ -763,6 +826,7 @@ def main():
                                     pareto_futures,
                                     pops_futures,
                                     md_futures,
+                                    uq_futures,
                                 )
                             )
 

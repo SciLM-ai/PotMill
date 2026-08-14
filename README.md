@@ -14,9 +14,10 @@ dynamic load balancer (see `CLAUDE.md` for the architecture).
 2. **Labeling** — energies/forces from a configurable backend (`labeling/`): UMA (fairchem), VASP, or LAMMPS
 3. **Featurization** — ACE/SNAP descriptors via FitSNAP (`featurization/`)
 4. **Fitting** — least-squares MLIP coefficients across a hyperparameter grid (`fitting/`)
-5. **Pareto front & uncertainty** — accuracy-vs-cost ranking and POPSRegression intervals (`analysis/`, `fitting/`)
+5. **Pareto front** — accuracy-vs-cost ranking of the whole hyperparameter grid (`analysis/`)
 6. **LAMMPS potentials** — the selected fits written as ready-to-run `.yace` + `.mod` files (`potential/`)
 7. **MD screening** — a short trajectory per exported potential, to catch fits that are accurate but unstable (`md/`)
+8. **Uncertainty** — a POPS error bar shipped with each potential, usable from ASE (`uq/`)
 
 ## Installation
 
@@ -259,6 +260,82 @@ The same screening runs standalone on any run that already has potentials:
 python -m potmill.md <run_dir> --steps 20000 --temperature 600
 ```
 
+### How much can you trust a prediction?
+
+`[Main] uq = 1` (the default) ships an uncertainty model with every exported potential:
+
+```
+potentials/rcut_5.0__nmax_9_4__lmax_0_4__eweight_10.0/
+    ....yace   ....mod   ....uq.npz     <- the uncertainty model
+potentials/uq.csv                       <- one row per potential (also joined into index.csv)
+```
+
+Use it from ASE, alongside the usual calculator methods:
+
+```python
+from ase.io import read
+from potmill.uq import PotMillCalculator
+
+atoms = read("candidate.cif")
+atoms.calc = PotMillCalculator("potentials/rcut_5.0__nmax_9_4__lmax_0_4__eweight_10.0")
+
+atoms.get_potential_energy()             # eV       (LAMMPS, the same evaluator MD uses)
+atoms.get_forces()                       # eV/A
+atoms.calc.get_uncertainty(atoms)        # eV/atom  -- 68% error bar
+atoms.calc.get_uncertainty(atoms, level=0.95)
+atoms.calc.get_bounds(atoms)             # (low, high) eV/atom -- worst case, not a percentile
+atoms.calc.get_ensemble(10)              # 10 alternative coefficient vectors, if you want a committee
+```
+
+or from the command line, on any run that has potentials:
+
+```bash
+python -m potmill.uq <run_dir>                       # fit + write the models
+python -m potmill.uq <run_dir> --predict frames.xyz  # energy +/- uncertainty per structure
+```
+
+**What the number means.** The method is POPS ([Swinburne *et al.*, *npj Comput. Mater.* 2025](https://www.nature.com/articles/s41524-025-01758-4)),
+which targets the error that actually dominates here: not noise in the labels, but the fact that a
+linear ACE model *cannot* reproduce the reference surface everywhere. For each training
+configuration it asks which parameter change would make the model match that configuration exactly;
+the spread of those pointwise-optimal parameters is the uncertainty, and a structure sitting where
+they disagree gets a large error bar. The raw spread is then rescaled by a split-conformal factor
+measured on **held-out** configurations (each predicted by the k-fold model that did not train on
+it), so `get_uncertainty(level=0.68)` means "68% of held-out structures had an error no larger than
+this". `get_bounds` is a different question — the extreme prediction of *any* model in the POPS set,
+a genuine worst case, so it is much wider than the error bar and is not a confidence interval.
+
+Per-atom uncertainties do **not** average down over a cell: the whole energy comes from one
+parameter vector, so the total-energy uncertainty is `natoms x` the per-atom value.
+
+`potentials/uq.csv` also makes the model's quality visible rather than implicit:
+
+| column | meaning |
+|---|---|
+| `uq_sigma_mean` | mean predicted uncertainty over the training configurations, eV/atom |
+| `uq_q68`, `uq_q95` | the calibration factors (1.0 = the raw spread was already right) |
+| `uq_raw_coverage` | fraction of held-out errors already inside the *uncalibrated* spread |
+| `uq_spearman` | rank correlation between predicted uncertainty and actual held-out error |
+| `uq_epistemic_share` | fraction of the *variance* from parameter (Bayesian) uncertainty rather than misspecification (a few % at 100k configurations; larger on small training sets) |
+| `uq_n_modes` | dimension of the POPS set |
+
+`uq_spearman` is the honest measure of whether the error bar tracks the error, and on the 100k GRACE
+run it is ~0.43. That is real but far from perfect, and it is close to the ceiling for *any* method
+here: two independent fits of the same data agree on which structures are hard only to ~0.74, so
+about 58% of the attainable signal is captured. Treat the numbers as a way to **rank** candidate
+structures (which to label next, which to distrust) rather than as an exact error prediction.
+
+```ini
+[Main]
+uq = 1
+
+[ourUQ]
+posterior = hypercube           # hypercube (uncertainty + worst-case bracket) | ensemble (uncertainty only)
+minimum_relative_error = 0.01   # a configuration informs the model only if |residual| >= this x RMSE
+percentile_clipping = 0.0       # >0 clips the set to that percentile: a narrower, less worst-case bracket
+max_potentials = 32
+```
+
 ### Re-checking a potential
 
 The exported files are verified against the fitted model in the test suite, so the pipeline does not
@@ -280,8 +357,8 @@ The pipeline reads `config.ini` (parsed by `potmill.config.ConfigManager`). Sect
 - **"our" sections** — PotMill's own parameters with documented defaults in `ConfigManager.DEFAULTS`:
   `[Main]` (stage toggles + global counts), `[FitSNAP]` (MLIP + elements), and the per-stage
   `[ourStructureGen]`, `[ourLabeling]`, `[ourFeaturization]`, `[ourFit]`, `[ourPotential]`,
-  `[ourMD]`, plus `[ourHyperparameters]` (the swept rcut/nmax/lmax/twojmax/eweight grid). Unknown
-  keys are warned about.
+  `[ourMD]`, `[ourUQ]`, plus `[ourHyperparameters]` (the swept rcut/nmax/lmax/twojmax/eweight grid).
+  Unknown keys are warned about.
 - **passthrough sections** — keyword arguments forwarded verbatim to external calculator classes
   (`[FAIRChemCalculator]`, `[Vasp]`, `[LAMMPS]`); omitted keys fall back to that library's defaults.
 

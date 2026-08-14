@@ -161,6 +161,7 @@ def task_counts(
     pareto,
     pops,
     md=(),
+    uq=(),
 ):
     """Build the {stage: count, stage_running: count} dict for ResourceMonitor.update_task_counts."""
     flat = {
@@ -171,6 +172,7 @@ def task_counts(
         "pareto": pareto,
         "pops": pops,
         "md": md,
+        "uq": uq,
     }
     nested = {"featurization": featurization, "fitting": fitting}
     counts = {}

@@ -30,6 +30,7 @@ STAGE_COLORS = {
     "pareto": "#E69F00",
     "pops": "#999999",
     "md": "#B15928",
+    "uq": "#6A3D9A",
 }
 
 STAGE_LABELS = {
@@ -42,6 +43,7 @@ STAGE_LABELS = {
     "pareto": "Pareto",
     "pops": "POPS/UQ",
     "md": "MD stability",
+    "uq": "UQ (POPS)",
 }
 
 STAGE_ORDER = list(STAGE_LABELS.keys())

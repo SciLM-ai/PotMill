@@ -33,12 +33,18 @@ class ConfigManager:
             "labeling": 1,
             "fit": 1,
             "pareto": 1,
+            # pops: LEGACY per-combo POPSRegression diagnostic. It reloads the whole cumulative
+            # design matrix per hyperparameter point and prints; it ships nothing. For usable
+            # uncertainties on the EXPORTED potentials use [Main] uq (see [ourUQ]) instead.
             "pops": 0,
             # potential: write the selected fitted potentials as LAMMPS-ready files at the end of
             # the run (see [ourPotential]). Needs featurize + fit + pareto to be on.
             "potential": 1,
             # md: MD-test each written potential (see [ourMD]). Needs `potential` to be on.
             "md": 0,
+            # uq: write a POPS uncertainty model beside each exported potential (see [ourUQ]).
+            # Needs `potential` to be on.
+            "uq": 1,
             "nconfigurations": 1000,
             "batch_size": 1000,
             # device drives the labeling + fitting executors: "cuda" = one GPU per job (today's
@@ -87,6 +93,20 @@ class ConfigManager:
             "steps": 10000,
             "max_potentials": 32,
             "md_cores_per_job": 1,
+        },
+        # POPS uncertainty for each exported potential -> potentials/<name>/<name>.uq.npz.
+        # `posterior`: "hypercube" keeps the bounding box of the pointwise corrections (gives both a
+        # standard deviation and an exact worst-case bracket); "ensemble" keeps only their covariance
+        # (standard deviation only). `minimum_relative_error` is POPS's row selection: a row informs
+        # the misspecification only if |residual| >= that fraction of the RMSE. `percentile_clipping`
+        # > 0 replaces the box's min/max by that percentile, trading worst-case guarantees for
+        # robustness to a single outlier configuration. Same task-count rule as [ourMD].
+        "ourUQ": {
+            "posterior": "hypercube",
+            "minimum_relative_error": 0.01,
+            "percentile_clipping": 0.0,
+            "max_potentials": 32,
+            "uq_cores_per_job": 1,
         },
         "ourHyperparameters": {
             "min_rcut": 5.0,
@@ -159,6 +179,13 @@ class ConfigManager:
                 f"WARNING: [Main] potential = 1 but [FitSNAP] mlip = "
                 f"{self._config['FitSNAP']['mlip']}; the LAMMPS potential export supports ACE only "
                 f"and will fail at the end of this run. Set [Main] potential = 0 to skip it.",
+                flush=True,
+            )
+        if self._config["Main"]["uq"] and not self._config["Main"]["potential"]:
+            print(
+                "WARNING: [Main] uq = 1 but [Main] potential = 0; the UQ stage attaches "
+                "uncertainties to EXPORTED potentials, so it has nothing to work on and will be "
+                "skipped.",
                 flush=True,
             )
         match = re.match(
