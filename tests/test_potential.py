@@ -18,6 +18,7 @@ from potmill.bfile import write_b
 from potmill.fitting import config_fold, foldfit
 from potmill.potential.betas import all_data_beta, all_data_beta_rows, state_n_configs
 from potmill.potential.labels import check_against_feature_names, feature_names_from_blist
+from potmill.potential.export import select_rows
 from potmill.potential.mod import pair_commands
 
 try:
@@ -158,6 +159,48 @@ class TestAllDataBeta(unittest.TestCase):
             torch.save(blob, path)
             with self.assertRaises(ValueError):
                 all_data_beta(path, 10.0)
+
+
+class TestKneeSelection(unittest.TestCase):
+    """The knee must be chosen on the same metric as the front it is selected from.
+
+    ``pareto_front`` is computed on the WEIGHTED errors, so the knee is too. The two criteria
+    coincide whenever the weighting does not reorder the front -- which is why an earlier
+    unweighted knee went unnoticed -- so this pins a case where they genuinely differ.
+    """
+
+    def _frame(self):
+        import pandas as pd
+
+        # Point B wins on the weighted errors, point C on the unweighted ones.
+        return pd.DataFrame(
+            {
+                "test_e_rmse": [1.00, 0.90, 0.50, 2.0],
+                "test_f_rmse": [1.00, 0.90, 0.50, 2.0],
+                "test_e_rmse_weighted": [1.00, 0.10, 0.95, 2.0],
+                "test_f_rmse_weighted": [1.00, 0.10, 0.95, 2.0],
+                "cost": [1.0, 1.0, 1.0, 1.0],
+                "pareto_front": [1, 1, 1, 0],
+            }
+        )
+
+    def test_knee_uses_the_weighted_errors(self):
+        df = self._frame()
+        _, knee_idx = select_rows(df, "pareto")
+        self.assertEqual(knee_idx, 1, "knee must be the weighted-optimal point, not the unweighted")
+        rows, _ = select_rows(df, "knee")
+        self.assertEqual(list(rows.index), [1])
+
+    def test_off_front_points_are_never_the_knee(self):
+        df = self._frame()
+        df.loc[3, ["test_e_rmse_weighted", "test_f_rmse_weighted"]] = 0.0  # best, but not on front
+        _, knee_idx = select_rows(df, "pareto")
+        self.assertEqual(knee_idx, 1)
+
+    def test_missing_weighted_columns_raise_rather_than_fall_back(self):
+        df = self._frame().drop(columns=["test_e_rmse_weighted", "test_f_rmse_weighted"])
+        with self.assertRaises(ValueError):
+            select_rows(df, "pareto")
 
 
 class TestLabels(unittest.TestCase):

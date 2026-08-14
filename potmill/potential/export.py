@@ -116,13 +116,30 @@ def configs_through_batch(start_path, batch):
     return total
 
 
+KNEE_COLUMNS = ("test_e_rmse_weighted", "test_f_rmse_weighted")
+
+
 def select_rows(df, which):
-    """Rows of the Pareto results to export, and the knee row's index (or None)."""
+    """Rows of the Pareto results to export, and the knee row's index (or None).
+
+    The knee is chosen on the WEIGHTED errors, because that is the metric the stored
+    ``pareto_front`` itself was computed on -- picking the knee on the unweighted errors would
+    single out a point by a different criterion than the front it is being selected from, and would
+    disagree with what ``plot_pareto``/``plot_errors`` draw. They coincide when the weighting does
+    not change the ranking (every GRACE run measured), and differ when it does: on a 100k UMA run
+    the weighted knee is rcut 5.5 / nmax 8,4 / lmax 0,4 while the unweighted one is 5 / 5,4 / 0,3.
+    """
     from potmill.analysis._recon import select_knee
 
     knee_idx = None
     if len(df):
-        knee_idx = select_knee(df, "test_e_rmse", "test_f_rmse").name
+        missing = [c for c in KNEE_COLUMNS if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"pareto results are missing {missing}, so the knee cannot be selected on the same "
+                f"metric as the Pareto front (stop, do not fall back to a different criterion)"
+            )
+        knee_idx = select_knee(df, *KNEE_COLUMNS).name
     if which == "none":
         return df.iloc[0:0], knee_idx
     if which == "all":
